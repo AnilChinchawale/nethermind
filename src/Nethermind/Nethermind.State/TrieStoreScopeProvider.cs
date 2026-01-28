@@ -115,11 +115,11 @@ public class TrieStoreScopeProvider : IWorldStateScopeProvider
         public void Commit(long blockNumber)
         {
             using var blockCommitter = _scopeProvider._trieStore.BeginBlockCommit(blockNumber);
-
-            // Note: These all runs in about 0.4ms. So the little overhead like attempting to sort the tasks
-            // may make it worst. Always check on mainnet.
             using ArrayPoolList<Task> commitTask = new ArrayPoolList<Task>(_storages.Count);
-            foreach (KeyValuePair<AddressAsKey, StorageTree> storage in _storages)
+            // Commit storages with most writes first to minimise waiting
+            foreach (KeyValuePair<AddressAsKey, StorageTree> storage in _storages
+                .Where(kv => kv.Value.OutstandingWritesEstimate > 0)
+                .OrderByDescending(kv => kv.Value.OutstandingWritesEstimate))
             {
                 if (blockCommitter.TryRequestConcurrencyQuota())
                 {
@@ -127,6 +127,7 @@ public class TrieStoreScopeProvider : IWorldStateScopeProvider
                     {
                         StorageTree st = (StorageTree)ctx;
                         st.Commit();
+                        st.ClearWritesEstimate();
                         blockCommitter.ReturnConcurrencyQuota();
                     }, storage.Value));
                 }
@@ -194,7 +195,17 @@ public class TrieStoreScopeProvider : IWorldStateScopeProvider
             while (_dirtyStorageTree.TryDequeue(out (AddressAsKey, Hash256) entry))
             {
                 (AddressAsKey key, Hash256 storageRoot) = entry;
-                if (!_dirtyAccounts.TryGetValue(key, out var account)) account = scope.Get(key);
+                bool hasExplicitStateUpdate = _dirtyAccounts.TryGetValue(key, out Account? account);
+                if (!hasExplicitStateUpdate)
+                {
+                    account = scope.Get(key);
+                    if (account is null && storageRoot != Keccak.EmptyTreeHash)
+                    {
+                        // Storage writes can materialize an account even if the account layer skipped a state write.
+                        account = Account.TotallyEmpty;
+                    }
+                }
+
                 if (account == null && storageRoot == Keccak.EmptyTreeHash) continue;
                 account ??= ThrowNullAccount(key);
                 account = account!.WithChangedStorageRoot(storageRoot);
@@ -261,9 +272,17 @@ public class TrieStoreScopeProvider : IWorldStateScopeProvider
             }
             else
             {
-                if (_wasSetCalled) throw new InvalidOperationException("Must call clear first in a storage write batch");
+                if (_wasSetCalled)
+                {
+                    ThrowNotSet();
+                }
                 _hasSelfDestruct = true;
+                storageTree.IncrementEstimate();
             }
+
+            [DoesNotReturn, StackTraceHidden]
+            static void ThrowNotSet()
+                => throw new InvalidOperationException("Must call clear first in a storage write batch");
         }
 
         public void Dispose()
@@ -276,9 +295,11 @@ public class TrieStoreScopeProvider : IWorldStateScopeProvider
                     storageTree.RootHash = Keccak.EmptyTreeHash;
                 }
 
+                var span = _bulkWrite.AsSpan();
                 using ArrayPoolListRef<PatriciaTree.BulkSetEntry> asRef =
-                    new ArrayPoolListRef<PatriciaTree.BulkSetEntry>(_bulkWrite.AsSpan());
+                    new ArrayPoolListRef<PatriciaTree.BulkSetEntry>(span);
                 storageTree.BulkSet(asRef);
+                storageTree.IncrementEstimate((ulong)span.Length);
 
                 _bulkWrite?.Dispose();
             }

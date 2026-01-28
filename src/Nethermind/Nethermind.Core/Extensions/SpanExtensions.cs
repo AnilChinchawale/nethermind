@@ -7,6 +7,9 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using Arm = System.Runtime.Intrinsics.Arm;
+using x64 = System.Runtime.Intrinsics.X86;
 using Nethermind.Core.Collections;
 using Nethermind.Core.Crypto;
 
@@ -18,6 +21,11 @@ namespace Nethermind.Core.Extensions
         // one node they will not be the same on another node or across a restart so hash collision cannot be used to degrade
         // the performance of the network as a whole.
         private static readonly uint s_instanceRandom = (uint)System.Security.Cryptography.RandomNumberGenerator.GetInt32(int.MinValue, int.MaxValue);
+
+        /// <summary>
+        /// Instance-random seed for hash calculations. Exposed for custom hash implementations.
+        /// </summary>
+        public static uint InstanceRandom => s_instanceRandom;
 
         public static string ToHexString(this in Memory<byte> memory, bool withZeroX = false)
         {
@@ -198,6 +206,96 @@ namespace Nethermind.Core.Extensions
         }
 
         /// <summary>
+        /// Computes a very fast, non-cryptographic 32-bit hash of exactly 32 bytes.
+        /// </summary>
+        /// <param name="start">Reference to the first byte of the 32-byte input.</param>
+        /// <returns>A 32-bit hash value.</returns>
+        /// <remarks>
+        /// This is an inlinable fast path for the common case of hashing 32 bytes (Hash256/UInt256).
+        /// Uses AES-NI for high-throughput hashing with excellent diffusion.
+        /// </remarks>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int FastHash32(ref byte start)
+        {
+            Debug.Assert(x64.Aes.IsSupported || Arm.Aes.IsSupported, "FastHash32 requires AES hardware support");
+
+            uint seed = s_instanceRandom + 32;
+
+            Vector128<byte> key = Unsafe.As<byte, Vector128<byte>>(ref start);
+            Vector128<byte> data = Unsafe.As<byte, Vector128<byte>>(ref Unsafe.Add(ref start, 16));
+            key ^= Vector128.CreateScalar(seed).AsByte();
+            Vector128<byte> mixed = x64.Aes.IsSupported
+                ? x64.Aes.Encrypt(data, key)
+                : Arm.Aes.MixColumns(Arm.Aes.Encrypt(data, key));
+            ulong compressed = mixed.AsUInt64().GetElement(0) ^ mixed.AsUInt64().GetElement(1);
+            return (int)(uint)(compressed ^ (compressed >> 32));
+        }
+
+        /// <summary>
+        /// Computes a very fast, non-cryptographic 64-bit hash of exactly 32 bytes.
+        /// </summary>
+        /// <param name="start">Reference to the first byte of the 32-byte input.</param>
+        /// <returns>A 64-bit hash value with good distribution across all bits.</returns>
+        /// <remarks>
+        /// Uses AES hardware acceleration when available, falls back to CRC32C otherwise.
+        /// </remarks>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static long FastHash64For32Bytes(ref byte start)
+        {
+            uint seed = s_instanceRandom + 32;
+
+            if (x64.Aes.IsSupported || Arm.Aes.IsSupported)
+            {
+                Vector128<byte> key = Unsafe.As<byte, Vector128<byte>>(ref start);
+                Vector128<byte> data = Unsafe.As<byte, Vector128<byte>>(ref Unsafe.Add(ref start, 16));
+                key ^= Vector128.CreateScalar(seed).AsByte();
+                Vector128<byte> mixed = x64.Aes.IsSupported
+                    ? x64.Aes.Encrypt(data, key)
+                    : Arm.Aes.MixColumns(Arm.Aes.Encrypt(data, key));
+                return (long)(mixed.AsUInt64().GetElement(0) ^ mixed.AsUInt64().GetElement(1));
+            }
+
+            // Fallback: CRC32C-based 64-bit hash
+            ulong h0 = BitOperations.Crc32C(seed, Unsafe.ReadUnaligned<ulong>(ref start));
+            ulong h1 = BitOperations.Crc32C(seed ^ 0x9E3779B9u, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref start, 8)));
+            ulong h2 = BitOperations.Crc32C(seed ^ 0x85EBCA6Bu, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref start, 16)));
+            ulong h3 = BitOperations.Crc32C(seed ^ 0xC2B2AE35u, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref start, 24)));
+            return (long)((h0 | (h1 << 32)) ^ (h2 | (h3 << 32)));
+        }
+
+        /// <summary>
+        /// Computes a very fast, non-cryptographic 64-bit hash of exactly 20 bytes (Address size).
+        /// </summary>
+        /// <param name="start">Reference to the first byte of the 20-byte input.</param>
+        /// <returns>A 64-bit hash value with good distribution across all bits.</returns>
+        /// <remarks>
+        /// Uses AES hardware acceleration when available, falls back to CRC32C otherwise.
+        /// </remarks>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static long FastHash64For20Bytes(ref byte start)
+        {
+            uint seed = s_instanceRandom + 20;
+
+            if (x64.Aes.IsSupported || Arm.Aes.IsSupported)
+            {
+                Vector128<byte> key = Unsafe.As<byte, Vector128<byte>>(ref start);
+                uint last4 = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref start, 16));
+                Vector128<byte> data = Vector128.CreateScalar(last4).AsByte();
+                key ^= Vector128.CreateScalar(seed).AsByte();
+                Vector128<byte> mixed = x64.Aes.IsSupported
+                    ? x64.Aes.Encrypt(data, key)
+                    : Arm.Aes.MixColumns(Arm.Aes.Encrypt(data, key));
+                return (long)(mixed.AsUInt64().GetElement(0) ^ mixed.AsUInt64().GetElement(1));
+            }
+
+            // Fallback: CRC32C-based 64-bit hash
+            ulong h0 = BitOperations.Crc32C(seed, Unsafe.ReadUnaligned<ulong>(ref start));
+            ulong h1 = BitOperations.Crc32C(seed ^ 0x9E3779B9u, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref start, 8)));
+            uint h2 = BitOperations.Crc32C(seed ^ 0x85EBCA6Bu, Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref start, 16)));
+            return (long)((h0 | (h1 << 32)) ^ ((ulong)h2 * 0x9E3779B97F4A7C15));
+        }
+
+        /// <summary>
         /// Computes a very fast, non-cryptographic 32-bit hash of the supplied bytes.
         /// </summary>
         /// <param name="input">The input bytes to hash.</param>
@@ -222,6 +320,7 @@ namespace Nethermind.Core.Extensions
         /// </para>
         /// </remarks>
         [SkipLocalsInit]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static int FastHash(this ReadOnlySpan<byte> input)
         {
             // Fast hardware-accelerated, non-cryptographic hash.
@@ -234,14 +333,38 @@ namespace Nethermind.Core.Extensions
             // Contract choice: empty input hashes to 0.
             // (Also avoids doing any ref work on an empty span.)
             if (len == 0) return 0;
-            // Using ref + Unsafe.ReadUnaligned lets the JIT hoist bounds checks
-            // and keep the hot loop tight.
-            ref byte start = ref MemoryMarshal.GetReference(input);
 
             // Seed with an instance-random value so attackers cannot trivially
             // engineer lots of same-bucket keys. Mixing in length makes "same prefix,
             // different length" less correlated (CRC alone can be length-sensitive).
             uint seed = s_instanceRandom + (uint)len;
+
+            // Using ref + Unsafe.ReadUnaligned lets the JIT hoist bounds checks
+            // and keep the hot loop tight.
+            ref byte start = ref MemoryMarshal.GetReference(input);
+
+            if (x64.Aes.IsSupported && len == 32)
+            {
+                Vector128<byte> key = Unsafe.As<byte, Vector128<byte>>(ref start);
+                Vector128<byte> data = Unsafe.As<byte, Vector128<byte>>(ref Unsafe.Add(ref start, 16));
+                // Mix in the instance-random seed
+                key ^= Vector128.CreateScalar(seed).AsByte();
+                // Single AESENC is a powerful mixer - 4 cycles, full diffusion
+                Vector128<byte> mixed = x64.Aes.Encrypt(data, key);
+                ulong compressed = mixed.AsUInt64().GetElement(0) ^ mixed.AsUInt64().GetElement(1);
+                return (int)(uint)(compressed ^ (compressed >> 32));
+            }
+            else if (Arm.Aes.IsSupported && len == 32)
+            {
+                Vector128<byte> key = Unsafe.As<byte, Vector128<byte>>(ref start);
+                Vector128<byte> data = Unsafe.As<byte, Vector128<byte>>(ref Unsafe.Add(ref start, 16));
+                // Mix in the instance-random seed
+                key ^= Vector128.CreateScalar(seed).AsByte();
+                // ARM needs explicit MixColumns for equivalent diffusion
+                Vector128<byte> mixed = Arm.Aes.MixColumns(Arm.Aes.Encrypt(data, key));
+                ulong compressed = mixed.AsUInt64().GetElement(0) ^ mixed.AsUInt64().GetElement(1);
+                return (int)(uint)(compressed ^ (compressed >> 32));
+            }
 
             // Small: 1-7 bytes.
             // Using the tail routine here avoids building a synthetic

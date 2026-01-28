@@ -433,7 +433,7 @@ public class StorageProviderTests
         WorldState provider = BuildStorageProvider(ctx);
         StorageCell accessedStorageCell = new StorageCell(TestItem.AddressA, 1);
         StorageCell nonAccessedStorageCell = new StorageCell(TestItem.AddressA, 2);
-        preBlockCaches.StorageCache[accessedStorageCell] = [1, 2, 3];
+        preBlockCaches.StorageCache.Set(accessedStorageCell, [1, 2, 3]);
         provider.Get(accessedStorageCell);
         provider.Commit(Paris.Instance);
         provider.ClearStorage(TestItem.AddressA);
@@ -602,7 +602,7 @@ public class StorageProviderTests
         PreBlockCaches preBlockCaches = new PreBlockCaches();
         Context ctx = new(preBlockCaches);
         StorageCell accessedStorageCell = new StorageCell(TestItem.AddressA, 1);
-        preBlockCaches.StorageCache[accessedStorageCell] = [1, 2, 3];
+        preBlockCaches.StorageCache.Set(accessedStorageCell, [1, 2, 3]);
 
         WorldState provider = BuildStorageProvider(ctx);
         provider.Get(accessedStorageCell).ToArray().Should().BeEquivalentTo([1, 2, 3]);
@@ -677,6 +677,32 @@ public class StorageProviderTests
         var clearedHash = worldState.StateRoot;
 
         clearedHash.Should().Be(emptyHash);
+    }
+
+    [Test]
+    public void Commit_empty_account_with_storage_value_materializes_account()
+    {
+        IWorldState worldState = new WorldState(
+            new TrieStoreScopeProvider(TestTrieStoreFactory.Build(new MemDb(), LimboLogs.Instance), new MemDb(), LimboLogs.Instance), LogManager);
+
+        BlockHeader baseBlock = null;
+        using (worldState.BeginScope(IWorldState.PreGenesis))
+        {
+            worldState.CreateAccount(TestItem.AddressA, 0);
+            worldState.Set(new StorageCell(TestItem.AddressA, 1), [1]);
+
+            Assert.DoesNotThrow(() => worldState.Commit(MuirGlacier.Instance));
+            worldState.AccountExists(TestItem.AddressA).Should().BeTrue();
+
+            worldState.CommitTree(0);
+            baseBlock = Build.A.BlockHeader.WithStateRoot(worldState.StateRoot).WithNumber(0).TestObject;
+        }
+
+        using (worldState.BeginScope(baseBlock))
+        {
+            worldState.AccountExists(TestItem.AddressA).Should().BeTrue();
+            worldState.Get(new StorageCell(TestItem.AddressA, 1)).ToArray().Should().BeEquivalentTo([1]);
+        }
     }
 
     private class Context
