@@ -32,80 +32,33 @@ namespace Nethermind.Synchronization.SnapSync
         {
             using var treeDisposer = tree;  // Ensures disposal when method exits
 
-            // TODO: Check the accounts boundaries and sorting
-            if (accounts.Count == 0)
-                return (AddRangeResult.EmptyAccounts, true, null, null, null);
-
-            // Validate sorting order
-            for (int i = 1; i < accounts.Count; i++)
-            {
-                if (accounts[i - 1].Path.CompareTo(accounts[i].Path) >= 0)
-                {
-                    return (AddRangeResult.InvalidOrder, true, null, null, null);
-                }
-            }
-
-            ValueHash256 lastHash = accounts[^1].Path;
-
-            (AddRangeResult result, List<(TrieNode, TreePath)> sortedBoundaryList, bool moreChildrenToRight) =
-                FillBoundaryTree(tree, startingHash, lastHash, limitHash, expectedRootHash, proofs);
-
-            if (result != AddRangeResult.OK)
-            {
-                return (result, true, null, null, tree.RootHash);
-            }
-
-            List<PathWithAccount> accountsWithStorage = new();
-            List<ValueHash256> codeHashes = new();
-
             using ArrayPoolListRef<PatriciaTree.BulkSetEntry> entries = new(accounts.Count);
             for (var index = 0; index < accounts.Count; index++)
             {
                 PathWithAccount account = accounts[index];
-
-                if (account.Path < startingHash)
-                {
-                    return (AddRangeResult.InvalidOrder, true, null, null, tree.RootHash);
-                }
-
-                if (account.Account.HasStorage)
-                {
-                    if (account.Path <= limitHash)
-                    {
-                        // If within range, we will need to schedule the storage range, hence this.
-                        // BUT only once per storage, hence the limit.
-                        accountsWithStorage.Add(account);
-                    }
-                }
-
-                if (account.Account.HasCode)
-                {
-                    codeHashes.Add(account.Account.CodeHash);
-                }
-
                 Account accountValue = account.Account;
                 Rlp rlp = accountValue.IsTotallyEmpty ? StateTree.EmptyAccountRlp : Rlp.Encode(accountValue);
                 entries.Add(new PatriciaTree.BulkSetEntry(account.Path, rlp.Bytes));
                 Interlocked.Add(ref Metrics.SnapStateSynced, rlp.Bytes.Length);
             }
 
-            tree.BulkSet(entries, PatriciaTree.Flags.WasSorted);
-            tree.UpdateRootHash();
+            var (result, moreChildrenToRight, _) = CommitRange(
+                tree, entries, startingHash, limitHash, expectedRootHash, proofs);
+            if (result != AddRangeResult.OK)
+                return (result, true, null, null, tree.RootHash);
 
-            if (tree.RootHash.ValueHash256 != expectedRootHash)
+            List<PathWithAccount> accountsWithStorage = new();
+            List<ValueHash256> codeHashes = new();
+            for (var index = 0; index < accounts.Count; index++)
             {
-                return (AddRangeResult.DifferentRootHash, true, null, null, tree.RootHash);
+                PathWithAccount account = accounts[index];
+
+                if (account.Account.HasStorage && account.Path <= limitHash)
+                    accountsWithStorage.Add(account);
+
+                if (account.Account.HasCode)
+                    codeHashes.Add(account.Account.CodeHash);
             }
-
-            StitchBoundaries(sortedBoundaryList, tree, startingHash);
-
-            // The upper bound is used to prevent proof nodes that covers next range from being persisted, except if
-            // this is the last range. This prevent double node writes per path which break flat. It also prevent leaf o
-            // that is after the range from being persisted, which prevent double write again.
-            ValueHash256 upperBound = accounts[^1].Path;
-            if (upperBound > limitHash) upperBound = limitHash;
-            if (!moreChildrenToRight) upperBound = ValueKeccak.MaxValue;
-            tree.Commit(writeFlags: WriteFlags.DisableWAL, upperBound);
 
             return (AddRangeResult.OK, moreChildrenToRight, accountsWithStorage, codeHashes, null);
         }
@@ -121,80 +74,72 @@ namespace Nethermind.Synchronization.SnapSync
         {
             using var treeDisposer = tree;  // Ensures disposal when method exits
 
-            if (slots.Count == 0)
-                return (AddRangeResult.EmptySlots, false, null, false);
-
-            // Validate sorting order
-            for (int i = 1; i < slots.Count; i++)
-            {
-                if (slots[i - 1].Path.CompareTo(slots[i].Path) >= 0)
-                {
-                    return (AddRangeResult.InvalidOrder, true, null, false);
-                }
-            }
-
-            ValueHash256 lastHash = slots[^1].Path;
-
-            (AddRangeResult result, List<(TrieNode, TreePath)> sortedBoundaryList, bool moreChildrenToRight) = FillBoundaryTree(
-                tree, startingHash, lastHash, limitHash ?? Keccak.MaxValue, account.Account.StorageRoot, proofs);
-
-            if (result != AddRangeResult.OK)
-            {
-                return (result, true, tree.RootHash, false);
-            }
-
             ValueHash256 effectiveLimitHash = limitHash ?? Keccak.MaxValue;
             ValueHash256 effectiveStartingHash = startingHash ?? ValueKeccak.Zero;
-
-            int hasExtraSlotIdx = -1;
 
             using ArrayPoolListRef<PatriciaTree.BulkSetEntry> entries = new(slots.Count);
             for (var index = 0; index < slots.Count; index++)
             {
                 PathWithStorageSlot slot = slots[index];
 
-                if (slot.Path > effectiveLimitHash)
-                {
-                    if (hasExtraSlotIdx == -1)
-                    {
-                        hasExtraSlotIdx = index;
-                    }
-                }
-                else if (slot.Path < effectiveStartingHash)
-                {
-                    return (AddRangeResult.InvalidOrder, true, null, false);
-                }
-
                 Interlocked.Add(ref Metrics.SnapStateSynced, slot.SlotRlpValue.Length);
                 entries.Add(new PatriciaTree.BulkSetEntry(slot.Path, slot.SlotRlpValue));
             }
 
+            var (result, moreChildrenToRight, isRootPersisted) = CommitRange(
+                tree, entries, effectiveStartingHash, effectiveLimitHash, account.Account.StorageRoot, proofs);
+            if (result != AddRangeResult.OK)
+                return (result, true, tree.RootHash, false);
+            return (AddRangeResult.OK, moreChildrenToRight, null, isRootPersisted);
+        }
+
+        private static (AddRangeResult result, bool moreChildrenToRight, bool isRootPersisted) CommitRange(
+            ISnapTree tree,
+            in ArrayPoolListRef<PatriciaTree.BulkSetEntry> entries,
+            in ValueHash256 startingHash,
+            in ValueHash256 limitHash,
+            in ValueHash256 expectedRootHash,
+            IReadOnlyList<byte[]>? proofs)
+        {
+            if (entries.Count == 0)
+                return (AddRangeResult.EmptyRange, true, false);
+
+            // Validate sorting order
+            for (int i = 1; i < entries.Count; i++)
+            {
+                if (entries[i - 1].Path.CompareTo(entries[i].Path) >= 0)
+                    return (AddRangeResult.InvalidOrder, true, false);
+            }
+
+            if (entries[0].Path < startingHash)
+                return (AddRangeResult.InvalidOrder, true, false);
+
+            ValueHash256 lastPath = entries[entries.Count - 1].Path;
+
+            (AddRangeResult result, List<(TrieNode, TreePath)> sortedBoundaryList, bool moreChildrenToRight) =
+                FillBoundaryTree(tree, startingHash, lastPath, limitHash, expectedRootHash, proofs);
+
+            if (result != AddRangeResult.OK)
+                return (result, true, false);
+
             tree.BulkSet(entries, PatriciaTree.Flags.WasSorted);
             tree.UpdateRootHash();
 
-            if (tree.RootHash.ValueHash256 != account.Account.StorageRoot)
-            {
-                return (AddRangeResult.DifferentRootHash, true, tree.RootHash, false);
-            }
+            if (tree.RootHash.ValueHash256 != expectedRootHash)
+                return (AddRangeResult.DifferentRootHash, true, false);
 
-            StitchBoundaries(sortedBoundaryList, tree, effectiveStartingHash);
+            StitchBoundaries(sortedBoundaryList, tree, startingHash);
 
             // The upper bound is used to prevent proof nodes that covers next range from being persisted, except if
             // this is the last range. This prevent double node writes per path which break flat. It also prevent leaf o
             // that is after the range from being persisted, which prevent double write again.
-            ValueHash256 upperBound = slots[^1].Path;
-            if (upperBound > limitHash) upperBound = effectiveLimitHash;
+            ValueHash256 upperBound = lastPath;
+            if (upperBound > limitHash) upperBound = limitHash;
             if (!moreChildrenToRight) upperBound = ValueKeccak.MaxValue;
-            tree.Commit(writeFlags: WriteFlags.DisableWAL, upperBound: upperBound);
+            tree.Commit(writeFlags: WriteFlags.DisableWAL, upperBound);
 
-            bool isRootPersisted = true;
-            if (sortedBoundaryList?.Count > 0)
-            {
-                // check the root proof if it is persisted
-                isRootPersisted = sortedBoundaryList[0].Item1.IsPersisted;
-            }
-
-            return (AddRangeResult.OK, moreChildrenToRight, null, isRootPersisted);
+            bool isRootPersisted = sortedBoundaryList is not { Count: > 0 } || sortedBoundaryList[0].Item1.IsPersisted;
+            return (AddRangeResult.OK, moreChildrenToRight, isRootPersisted);
         }
 
         [SkipLocalsInit]

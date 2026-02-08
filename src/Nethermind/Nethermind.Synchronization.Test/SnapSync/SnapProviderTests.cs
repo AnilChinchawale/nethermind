@@ -140,7 +140,7 @@ public class SnapProviderTests(bool useFlat)
             storage,
             0,
             emptySlots,
-            null).Should().Be(AddRangeResult.EmptySlots);
+            null).Should().Be(AddRangeResult.EmptyRange);
 
         progressTracker.IsSnapGetRangesFinished().Should().BeFalse();
     }

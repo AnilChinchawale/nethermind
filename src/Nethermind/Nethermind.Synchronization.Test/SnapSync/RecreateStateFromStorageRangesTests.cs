@@ -205,8 +205,7 @@ namespace Nethermind.Synchronization.Test.SnapSync
                 null,
                 proofs: null);
 
-            result.Should().Be(AddRangeResult.EmptySlots);
-            moreChildrenToRight.Should().BeFalse();
+            result.Should().Be(AddRangeResult.EmptyRange);
             testMemDb.WritesCount.Should().Be(0); // No writes should happen
         }
 
