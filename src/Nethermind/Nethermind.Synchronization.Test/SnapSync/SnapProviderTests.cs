@@ -22,6 +22,7 @@ using Nethermind.Db;
 using Nethermind.Serialization.Rlp;
 using Nethermind.State;
 using Nethermind.State.Flat;
+using Nethermind.State.Proofs;
 using Nethermind.State.Flat.Persistence;
 using Nethermind.State.Flat.Sync;
 using Nethermind.State.SnapServer;
@@ -143,6 +144,68 @@ public class SnapProviderTests(bool useFlat)
             null).Should().Be(AddRangeResult.EmptyRange);
 
         progressTracker.IsSnapGetRangesFinished().Should().BeFalse();
+    }
+
+    [Test]
+    public void AddStorageRange_ShouldPersistEntries()
+    {
+        const int slotCount = 6;
+        TestMemDb stateDb = new TestMemDb();
+        TestRawTrieStore store = new TestRawTrieStore(stateDb);
+
+        // Build storage tree with RLP-encoded 32-byte values
+        Hash256 accountHash = TestItem.Tree.AccountAddress0;
+        StorageTree storageTree = new StorageTree(store.GetTrieStore(accountHash), LimboLogs.Instance);
+        PathWithStorageSlot[] slots = new PathWithStorageSlot[slotCount];
+        for (int i = 0; i < slotCount; i++)
+        {
+            ValueHash256 slotKey = Keccak.Compute(i.ToBigEndianByteArray());
+            byte[] value = (i + 1).ToBigEndianByteArray();
+            byte[] rlpValue = Rlp.Encode(value).Bytes;
+            storageTree.Set(slotKey, rlpValue, false);
+            slots[i] = new PathWithStorageSlot(slotKey, rlpValue);
+        }
+        storageTree.Commit();
+        Array.Sort(slots, (a, b) => a.Path.CompareTo(b.Path));
+
+        StateTree stateTree = new StateTree(store.GetTrieStore(null), LimboLogs.Instance);
+        stateTree.Set(accountHash, Build.An.Account.WithBalance(1).WithStorageRoot(storageTree.RootHash).TestObject);
+        stateTree.Commit();
+
+        // Collect proofs
+        AccountProofCollector proofCollector = new(accountHash.Bytes,
+            new ValueHash256[] { Keccak.Zero, slots[^1].Path });
+        stateTree.Accept(proofCollector, stateTree.RootHash);
+        var proof = proofCollector.BuildResult();
+
+        using IContainer container = CreateContainer();
+        SnapProvider snapProvider = container.Resolve<SnapProvider>();
+
+        StorageRange storageRange = new()
+        {
+            StartingHash = Keccak.Zero,
+            Accounts = new ArrayPoolList<PathWithAccount>(1)
+            {
+                new(accountHash, new Account(0, 1).WithChangedStorageRoot(storageTree.RootHash))
+            },
+        };
+
+        snapProvider.AddStorageRangeForAccount(
+            storageRange, 0, slots,
+            proof!.StorageProofs![0].Proof!.Concat(proof!.StorageProofs![1].Proof!).ToArray())
+            .Should().Be(AddRangeResult.OK);
+
+        if (useFlat)
+        {
+            IPersistence persistence = container.Resolve<IPersistence>();
+            using var reader = persistence.CreateReader();
+            int count = 0;
+            using (var iter = reader.CreateStorageIterator(accountHash))
+            {
+                while (iter.MoveNext()) count++;
+            }
+            count.Should().Be(slotCount);
+        }
     }
 
     [Test]
