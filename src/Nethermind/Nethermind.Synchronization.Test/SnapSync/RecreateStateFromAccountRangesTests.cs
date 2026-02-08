@@ -180,7 +180,7 @@ public class RecreateStateFromAccountRangesTests
 
         var result2 = snapProvider.AddAccountRange(1, rootHash, TestItem.Tree.AccountsWithPaths[2].Path, TestItem.Tree.AccountsWithPaths[2..4], firstProof!.Concat(lastProof!).ToArray());
 
-        Assert.That(db.GetAllKeys().Count, Is.EqualTo(5));  // we don't persist proof nodes (boundary nodes)
+        Assert.That(db.GetAllKeys().Count, Is.EqualTo(4));  // we don't persist proof nodes (boundary nodes)
 
         firstProof = CreateProofForPath(TestItem.Tree.AccountsWithPaths[4].Path.Bytes);
         lastProof = CreateProofForPath(TestItem.Tree.AccountsWithPaths[5].Path.Bytes);
@@ -190,7 +190,7 @@ public class RecreateStateFromAccountRangesTests
         Assert.That(result1, Is.EqualTo(AddRangeResult.OK));
         Assert.That(result2, Is.EqualTo(AddRangeResult.OK));
         Assert.That(result3, Is.EqualTo(AddRangeResult.OK));
-        Assert.That(db.GetAllKeys().Count, Is.EqualTo(10));  // we persist proof nodes (boundary nodes) via stitching
+        Assert.That(db.GetAllKeys().Count, Is.EqualTo(8));  // we persist proof nodes (boundary nodes) via stitching
         Assert.That(db.KeyExists(rootHash), Is.False);
     }
 
@@ -223,7 +223,7 @@ public class RecreateStateFromAccountRangesTests
         Assert.That(result1, Is.EqualTo(AddRangeResult.OK));
         Assert.That(result2, Is.EqualTo(AddRangeResult.OK));
         Assert.That(result3, Is.EqualTo(AddRangeResult.OK));
-        Assert.That(db.GetAllKeys().Count, Is.EqualTo(10));  // we persist proof nodes (boundary nodes) via stitching
+        Assert.That(db.GetAllKeys().Count, Is.EqualTo(8));  // we persist proof nodes (boundary nodes) via stitching
         Assert.That(db.KeyExists(rootHash), Is.False);
     }
 
@@ -256,7 +256,7 @@ public class RecreateStateFromAccountRangesTests
         Assert.That(result1, Is.EqualTo(AddRangeResult.OK));
         Assert.That(result2, Is.EqualTo(AddRangeResult.OK));
         Assert.That(result3, Is.EqualTo(AddRangeResult.OK));
-        Assert.That(db.GetAllKeys().Count, Is.EqualTo(10));  // we persist proof nodes (boundary nodes) via stitching
+        Assert.That(db.GetAllKeys().Count, Is.EqualTo(8));  // we persist proof nodes (boundary nodes) via stitching
         Assert.That(db.KeyExists(rootHash), Is.False);
     }
 

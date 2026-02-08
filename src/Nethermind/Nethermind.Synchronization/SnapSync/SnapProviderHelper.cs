@@ -134,8 +134,14 @@ namespace Nethermind.Synchronization.SnapSync
             // this is the last range. This prevent double node writes per path which break flat. It also prevent leaf o
             // that is after the range from being persisted, which prevent double write again.
             ValueHash256 upperBound = lastPath;
-            if (upperBound > limitHash) upperBound = limitHash;
-            if (!moreChildrenToRight) upperBound = ValueKeccak.MaxValue;
+            if (upperBound > limitHash)
+            {
+                upperBound = limitHash;
+            }
+            else
+            {
+                if (!moreChildrenToRight) upperBound = ValueKeccak.MaxValue;
+            }
             tree.Commit(writeFlags: WriteFlags.DisableWAL, upperBound);
 
             bool isRootPersisted = sortedBoundaryList is not { Count: > 0 } || sortedBoundaryList[0].Item1.IsPersisted;
