@@ -32,6 +32,19 @@ public class RocksDbPersistence(IColumnsDb<FlatDbColumns> db) : IPersistence
 
     public void Flush() => db.Flush();
 
+    public void Clear()
+    {
+        foreach (FlatDbColumns column in db.ColumnKeys)
+        {
+            IDb columnDb = db.GetColumnDb(column);
+            using IWriteBatch batch = columnDb.StartWriteBatch();
+            foreach (byte[] key in columnDb.GetAllKeys())
+            {
+                batch.Remove(key);
+            }
+        }
+    }
+
     public IPersistence.IPersistenceReader CreateReader()
     {
         IColumnDbSnapshot<FlatDbColumns> snapshot = db.CreateSnapshot();
@@ -73,7 +86,7 @@ public class RocksDbPersistence(IColumnsDb<FlatDbColumns> db) : IPersistence
     {
         IColumnDbSnapshot<FlatDbColumns> dbSnap = db.CreateSnapshot();
         StateId currentState = ReadCurrentState(dbSnap.GetColumn(FlatDbColumns.Metadata));
-        if (currentState != from)
+        if (from != StateId.Sync && currentState != from)
         {
             dbSnap.Dispose();
             throw new InvalidOperationException($"Attempted to apply snapshot on top of wrong state. Snapshot from: {from}, Db state: {currentState}");
@@ -81,7 +94,9 @@ public class RocksDbPersistence(IColumnsDb<FlatDbColumns> db) : IPersistence
 
         IColumnsWriteBatch<FlatDbColumns> batch = db.StartWriteBatch();
 
-        BaseTriePersistence.WriteBatch trieWriteBatch = new(
+        BaseTriePersistence.WriteBatch trieWriteBatch = new BaseTriePersistence.WriteBatch(
+            (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.StateTopNodes),
+            (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.StateNodes),
             (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.StorageNodes),
             (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.FallbackNodes),
             batch.GetColumnBatch(FlatDbColumns.StateTopNodes),
@@ -95,6 +110,7 @@ public class RocksDbPersistence(IColumnsDb<FlatDbColumns> db) : IPersistence
         return new BasePersistence.WriteBatch<BasePersistence.ToHashedWriteBatch<BaseFlatPersistence.WriteBatch>, BaseTriePersistence.WriteBatch>(
             new BasePersistence.ToHashedWriteBatch<BaseFlatPersistence.WriteBatch>(
                 new BaseFlatPersistence.WriteBatch(
+                    (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.Account),
                     (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.Storage),
                     batch.GetColumnBatch(FlatDbColumns.Account),
                     batch.GetColumnBatch(FlatDbColumns.Storage),
@@ -104,7 +120,8 @@ public class RocksDbPersistence(IColumnsDb<FlatDbColumns> db) : IPersistence
             trieWriteBatch,
             new Reactive.AnonymousDisposable(() =>
             {
-                SetCurrentState(batch.GetColumnBatch(FlatDbColumns.Metadata), toCopy);
+                if (toCopy != StateId.Sync)
+                    SetCurrentState(batch.GetColumnBatch(FlatDbColumns.Metadata), toCopy);
                 batch.Dispose();
                 dbSnap.Dispose();
                 if (!flags.HasFlag(WriteFlags.DisableWAL))

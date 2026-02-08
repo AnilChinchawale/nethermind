@@ -312,14 +312,15 @@ public class RecreateStateFromAccountRangesTests
         byte[][] lastProof = CreateProofForPath(TestItem.Tree.AccountsWithPaths[1].Path.Bytes);
         byte[][] proofs = firstProof.Concat(lastProof).ToArray();
 
-        StateTree newTree = new(new TestRawTrieStore(new MemDb()), LimboLogs.Instance);
+        var adapter = new SnapUpperBoundAdapter(new RawScopedTrieStore(new MemDb()));
+        StateTree newTree = new(adapter, LimboLogs.Instance);
 
         PathWithAccount[] receiptAccounts = TestItem.Tree.AccountsWithPaths[0..2];
 
         bool HasMoreChildren(ValueHash256 limitHash)
         {
-            (AddRangeResult _, bool moreChildrenToRight, IList<PathWithAccount> _, IList<ValueHash256> _) =
-                SnapProviderHelper.AddAccountRange(newTree, 0, rootHash, Keccak.Zero, limitHash.ToCommitment(), receiptAccounts, proofs);
+            (AddRangeResult _, bool moreChildrenToRight, IList<PathWithAccount> _, IList<ValueHash256> _, Hash256 _) =
+                SnapProviderHelper.AddAccountRange(new PatriciaSnapStateTree(newTree, adapter), 0, rootHash, Keccak.Zero, limitHash.ToCommitment(), receiptAccounts, proofs);
             return moreChildrenToRight;
         }
 
@@ -360,14 +361,15 @@ public class RecreateStateFromAccountRangesTests
         byte[][] lastProof = CreateProofForPath(ac2.Path.Bytes, tree);
         byte[][] proofs = firstProof.Concat(lastProof).ToArray();
 
-        StateTree newTree = new(new TestRawTrieStore(new MemDb()), LimboLogs.Instance);
+        var adapter = new SnapUpperBoundAdapter(new RawScopedTrieStore(new MemDb()));
+        StateTree newTree = new(adapter, LimboLogs.Instance);
 
         PathWithAccount[] receiptAccounts = { ac1, ac2 };
 
         bool HasMoreChildren(ValueHash256 limitHash)
         {
-            (AddRangeResult _, bool moreChildrenToRight, IList<PathWithAccount> _, IList<ValueHash256> _) =
-                SnapProviderHelper.AddAccountRange(newTree, 0, rootHash, Keccak.Zero, limitHash.ToCommitment(), receiptAccounts, proofs);
+            (AddRangeResult _, bool moreChildrenToRight, IList<PathWithAccount> _, IList<ValueHash256> _, Hash256 _) =
+                SnapProviderHelper.AddAccountRange(new PatriciaSnapStateTree(newTree, adapter), 0, rootHash, Keccak.Zero, limitHash.ToCommitment(), receiptAccounts, proofs);
             return moreChildrenToRight;
         }
 

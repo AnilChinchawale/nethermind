@@ -817,6 +817,13 @@ namespace Nethermind.Trie
                     {
                         return originalNode;
                     }
+
+                    if (!originalNode.IsSealed)
+                    {
+                        // Use the original where possible. This is actually needed for snapsync because of the BoundaryProofNode flag
+                        originalNode.SetChild(0, onlyChildNode);
+                        return originalNode;
+                    }
                 }
 
                 return TrieNodeFactory.CreateExtension(extensionKey, onlyChildNode);
@@ -838,6 +845,13 @@ namespace Nethermind.Trie
                         path.TruncateMut(originalLength);
                         if (!ShouldUpdateChild(originalNode, originalChild, newChild))
                         {
+                            return originalNode;
+                        }
+
+                        if (!originalNode.IsSealed)
+                        {
+                            // Use the original where possible. This is actually needed for snapsync because of the BoundaryProofNode flag
+                            originalNode.SetChild(0, newChild);
                             return originalNode;
                         }
                     }

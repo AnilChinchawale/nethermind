@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Autofac;
+using Autofac.Features.AttributeFilters;
 using FluentAssertions;
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.Synchronization;
@@ -30,6 +31,7 @@ using Nethermind.Stats.Model;
 using Nethermind.Synchronization.FastSync;
 using Nethermind.Synchronization.ParallelSync;
 using Nethermind.Synchronization.Peers;
+using Nethermind.Synchronization.SnapSync;
 using Nethermind.Synchronization.Test.ParallelSync;
 using Nethermind.Trie;
 using Nethermind.Trie.Pruning;
@@ -37,7 +39,10 @@ using NUnit.Framework;
 
 namespace Nethermind.Synchronization.Test.FastSync;
 
-public abstract class StateSyncFeedTestsBase(int defaultPeerCount = 1, int defaultPeerMaxRandomLatency = 0)
+public abstract class StateSyncFeedTestsBase(
+    Action<ContainerBuilder> registerTreeSyncStore,
+    int defaultPeerCount = 1,
+    int defaultPeerMaxRandomLatency = 0)
 {
     public const int TimeoutLength = 20000;
 
@@ -72,7 +77,7 @@ public abstract class StateSyncFeedTestsBase(int defaultPeerCount = 1, int defau
         return remoteStorageTree;
     }
 
-    protected IContainer PrepareDownloader(DbContext dbContext, Action<SyncPeerMock>? mockMutator = null, int syncDispatcherAllocateTimeoutMs = 10)
+    protected IContainer PrepareDownloader(RemoteDbContext remote, Action<SyncPeerMock>? mockMutator = null, int syncDispatcherAllocateTimeoutMs = 10)
     {
         SyncPeerMock[] syncPeers = new SyncPeerMock[defaultPeerCount];
         for (int i = 0; i < defaultPeerCount; i++)
@@ -81,12 +86,12 @@ public abstract class StateSyncFeedTestsBase(int defaultPeerCount = 1, int defau
             {
                 EthDetails = "eth68",
             };
-            SyncPeerMock mock = new SyncPeerMock(dbContext.RemoteStateDb, dbContext.RemoteCodeDb, node: node, maxRandomizedLatencyMs: defaultPeerMaxRandomLatency);
+            SyncPeerMock mock = new SyncPeerMock(remote.StateDb, remote.CodeDb, node: node, maxRandomizedLatencyMs: defaultPeerMaxRandomLatency);
             mockMutator?.Invoke(mock);
             syncPeers[i] = mock;
         }
 
-        ContainerBuilder builder = BuildTestContainerBuilder(dbContext, syncDispatcherAllocateTimeoutMs)
+        ContainerBuilder builder = BuildTestContainerBuilder(remote, syncDispatcherAllocateTimeoutMs)
             .AddSingleton<SyncPeerMock[]>(syncPeers);
 
         builder.RegisterBuildCallback((ctx) =>
@@ -104,7 +109,7 @@ public abstract class StateSyncFeedTestsBase(int defaultPeerCount = 1, int defau
         return builder.Build();
     }
 
-    protected ContainerBuilder BuildTestContainerBuilder(DbContext dbContext, int syncDispatcherAllocateTimeoutMs = 10)
+    protected ContainerBuilder BuildTestContainerBuilder(RemoteDbContext remote, int syncDispatcherAllocateTimeoutMs = 10)
     {
         ContainerBuilder containerBuilder = new ContainerBuilder()
             .AddModule(new TestNethermindModule(new ConfigProvider(new SyncConfig()
@@ -117,17 +122,21 @@ public abstract class StateSyncFeedTestsBase(int defaultPeerCount = 1, int defau
                 return syncConfig;
             })
             .AddSingleton<ILogManager>(_logManager)
-            .AddKeyedSingleton<IDb>(DbNames.Code, dbContext.LocalCodeDb)
-            .AddKeyedSingleton<IDb>(DbNames.State, dbContext.LocalStateDb)
-            .AddSingleton<INodeStorage>(dbContext.LocalNodeStorage)
+            .AddSingleton<INodeStorage>((ctx) => new NodeStorage(ctx.ResolveNamed<IDb>(DbNames.State)))
+            .AddSingleton<ISnapTrieFactory, PatriciaSnapTrieFactory>()
+            .AddSingleton<LocalDbContext>()
+            .AddKeyedSingleton<IDb>(DbNames.Code, (_) => new TestMemDb())
+            .AddKeyedSingleton<IDb>(DbNames.State, (_) => new TestMemDb())
 
             // Use factory function to make it lazy in case test need to replace IBlockTree
             // Cache key includes type name so different inherited test classes don't share the same blocktree
             .AddSingleton<IBlockTree>((ctx) => CachedBlockTreeBuilder.BuildCached(
-                $"{GetType().Name}{dbContext.RemoteStateTree.RootHash}{TestChainLength}",
-                () => Build.A.BlockTree().WithStateRoot(dbContext.RemoteStateTree.RootHash).OfChainLength(TestChainLength)))
+                $"{GetType().Name}{remote.StateTree.RootHash}{TestChainLength}",
+                () => Build.A.BlockTree().WithStateRoot(remote.StateTree.RootHash).OfChainLength(TestChainLength)))
 
             .Add<SafeContext>();
+
+        registerTreeSyncStore(containerBuilder);
 
         containerBuilder.RegisterBuildCallback((ctx) =>
         {
@@ -206,68 +215,90 @@ public abstract class StateSyncFeedTestsBase(int defaultPeerCount = 1, int defau
         }
     }
 
-    protected class DbContext
+    protected class LocalDbContext
     {
-        private readonly ILogger _logger;
-
-        public DbContext(ILogger logger, ILogManager logManager)
+        public LocalDbContext(
+            [KeyFilter(DbNames.Code)] IDb codeDb,
+            [KeyFilter(DbNames.State)] IDb stateDb,
+            INodeStorage nodeStorage,
+            ILogManager logManager)
         {
-            _logger = logger;
-            RemoteDb = new MemDb();
-            LocalDb = new TestMemDb();
-            RemoteStateDb = RemoteDb;
-            LocalStateDb = LocalDb;
-            LocalNodeStorage = new NodeStorage(LocalDb);
-            LocalCodeDb = new TestMemDb();
-            RemoteCodeDb = new MemDb();
-            RemoteTrieStore = TestTrieStoreFactory.Build(RemoteStateDb, logManager);
-
-            RemoteStateTree = new StateTree(RemoteTrieStore, logManager);
-            LocalStateTree = new StateTree(TestTrieStoreFactory.Build(LocalStateDb, logManager), logManager);
+            NodeStorage = nodeStorage;
+            CodeDb = (TestMemDb)codeDb;
+            Db = (TestMemDb)stateDb;
+            StateTree = new StateTree(TestTrieStoreFactory.Build(nodeStorage, logManager), logManager);
         }
 
-        public MemDb RemoteCodeDb { get; }
-        public TestMemDb LocalCodeDb { get; }
-        public MemDb RemoteDb { get; }
-        public TestMemDb LocalDb { get; }
-        public ITrieStore RemoteTrieStore { get; }
-        public IDb RemoteStateDb { get; }
-        public IDb LocalStateDb { get; }
-        public NodeStorage LocalNodeStorage { get; }
-        public StateTree RemoteStateTree { get; }
-        public StateTree LocalStateTree { get; }
+        private TestMemDb CodeDb { get; }
+        private TestMemDb Db { get; }
+        private INodeStorage NodeStorage { get; }
+        private StateTree StateTree { get; }
 
-        public void CompareTrees(string stage, bool skipLogs = false)
+        public Hash256 RootHash
         {
-            if (!skipLogs) _logger.Info($"==================== {stage} ====================");
-            LocalStateTree.RootHash = RemoteStateTree.RootHash;
+            get => StateTree.RootHash;
+            set => StateTree.RootHash = value;
+        }
 
-            if (!skipLogs) _logger.Info("-------------------- REMOTE --------------------");
+        public void UpdateRootHash() => StateTree.UpdateRootHash();
+
+        public void Set(Hash256 address, Account? account) => StateTree.Set(address, account);
+
+        public void Commit() => StateTree.Commit();
+
+        public void AssertFlushed()
+        {
+            Db.WasFlushed.Should().BeTrue();
+            CodeDb.WasFlushed.Should().BeTrue();
+        }
+
+        public void CompareTrees(RemoteDbContext remote, ILogger logger, string stage, bool skipLogs = false)
+        {
+            if (!skipLogs) logger.Info($"==================== {stage} ====================");
+            StateTree.RootHash = remote.StateTree.RootHash;
+
+            if (!skipLogs) logger.Info("-------------------- REMOTE --------------------");
             TreeDumper dumper = new TreeDumper();
-            RemoteStateTree.Accept(dumper, RemoteStateTree.RootHash);
-            string remote = dumper.ToString();
-            if (!skipLogs) _logger.Info(remote);
-            if (!skipLogs) _logger.Info("-------------------- LOCAL --------------------");
+            remote.StateTree.Accept(dumper, remote.StateTree.RootHash);
+            string remoteStr = dumper.ToString();
+            if (!skipLogs) logger.Info(remoteStr);
+            if (!skipLogs) logger.Info("-------------------- LOCAL --------------------");
             dumper.Reset();
-            LocalStateTree.Accept(dumper, LocalStateTree.RootHash);
-            string local = dumper.ToString();
-            if (!skipLogs) _logger.Info(local);
+            StateTree.Accept(dumper, StateTree.RootHash);
+            string localStr = dumper.ToString();
+            if (!skipLogs) logger.Info(localStr);
 
             if (stage == "END")
             {
-                Assert.That(local, Is.EqualTo(remote), $"{stage}{Environment.NewLine}{remote}{Environment.NewLine}{local}");
-                TrieStatsCollector collector = new(LocalCodeDb, LimboLogs.Instance);
-                LocalStateTree.Accept(collector, LocalStateTree.RootHash);
+                Assert.That(localStr, Is.EqualTo(remoteStr), $"{stage}{Environment.NewLine}{remoteStr}{Environment.NewLine}{localStr}");
+                TrieStatsCollector collector = new(CodeDb, LimboLogs.Instance);
+                StateTree.Accept(collector, StateTree.RootHash);
                 Assert.That(collector.Stats.MissingNodes, Is.EqualTo(0));
                 Assert.That(collector.Stats.MissingCode, Is.EqualTo(0));
             }
         }
 
-        public void AssertFlushed()
+        public void DeleteStateRoot()
         {
-            LocalDb.WasFlushed.Should().BeTrue();
-            LocalCodeDb.WasFlushed.Should().BeTrue();
+            NodeStorage.Set(null, TreePath.Empty, RootHash, null);
         }
+    }
+
+    protected class RemoteDbContext
+    {
+        public RemoteDbContext(ILogManager logManager)
+        {
+            CodeDb = new MemDb();
+            Db = new MemDb();
+            TrieStore = TestTrieStoreFactory.Build(Db, logManager);
+            StateTree = new StateTree(TrieStore, logManager);
+        }
+
+        public MemDb CodeDb { get; }
+        public MemDb Db { get; }
+        public IDb StateDb => Db;
+        public ITrieStore TrieStore { get; }
+        public StateTree StateTree { get; }
     }
 
     protected class SyncPeerMock : BaseSyncPeerMock

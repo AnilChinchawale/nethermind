@@ -27,6 +27,19 @@ public class PreimageRocksdbPersistence(IColumnsDb<FlatDbColumns> db) : IPersist
 
     public void Flush() => db.Flush();
 
+    public void Clear()
+    {
+        foreach (FlatDbColumns column in db.ColumnKeys)
+        {
+            IDb columnDb = db.GetColumnDb(column);
+            using IWriteBatch batch = columnDb.StartWriteBatch();
+            foreach (byte[] key in columnDb.GetAllKeys())
+            {
+                batch.Remove(key);
+            }
+        }
+    }
+
     internal static StateId ReadCurrentState(IReadOnlyKeyValueStore kv)
     {
         byte[]? bytes = kv.Get(CurrentStateKey);
@@ -88,7 +101,7 @@ public class PreimageRocksdbPersistence(IColumnsDb<FlatDbColumns> db) : IPersist
         IColumnsWriteBatch<FlatDbColumns> batch = db.StartWriteBatch();
         IColumnDbSnapshot<FlatDbColumns> dbSnap = db.CreateSnapshot();
         StateId currentState = ReadCurrentState(dbSnap.GetColumn(FlatDbColumns.Metadata));
-        if (currentState != from)
+        if (from != StateId.Sync && currentState != from)
         {
             dbSnap.Dispose();
             throw new InvalidOperationException(
@@ -97,14 +110,17 @@ public class PreimageRocksdbPersistence(IColumnsDb<FlatDbColumns> db) : IPersist
 
         FakeHashWriter<BaseFlatPersistence.WriteBatch> flatWriter = new(
             new BaseFlatPersistence.WriteBatch(
-                ((ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.Storage)),
+                (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.Account),
+                (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.Storage),
                 batch.GetColumnBatch(FlatDbColumns.Account),
                 batch.GetColumnBatch(FlatDbColumns.Storage),
                 flags
             )
         );
 
-        BaseTriePersistence.WriteBatch trieWriteBatch = new(
+        BaseTriePersistence.WriteBatch trieWriteBatch = new BaseTriePersistence.WriteBatch(
+            (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.StateTopNodes),
+            (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.StateNodes),
             (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.StorageNodes),
             (ISortedKeyValueStore)dbSnap.GetColumn(FlatDbColumns.FallbackNodes),
             batch.GetColumnBatch(FlatDbColumns.StateTopNodes),
@@ -119,7 +135,8 @@ public class PreimageRocksdbPersistence(IColumnsDb<FlatDbColumns> db) : IPersist
             trieWriteBatch,
             new Reactive.AnonymousDisposable(() =>
             {
-                SetCurrentState(batch.GetColumnBatch(FlatDbColumns.Metadata), toCopy);
+                if (toCopy != StateId.Sync)
+                    SetCurrentState(batch.GetColumnBatch(FlatDbColumns.Metadata), toCopy);
                 batch.Dispose();
                 dbSnap.Dispose();
                 if (!flags.HasFlag(WriteFlags.DisableWAL))
@@ -175,6 +192,12 @@ public class PreimageRocksdbPersistence(IColumnsDb<FlatDbColumns> db) : IPersist
 
         public void SetAccountRaw(Hash256 addrHash, Account account) =>
             throw new InvalidOperationException("Raw operations not available in preimage mode");
+
+        public void DeleteAccountRange(in ValueHash256 fromPath, in ValueHash256 toPath) =>
+            throw new InvalidOperationException("Range deletion not available in preimage mode");
+
+        public void DeleteStorageRange(in ValueHash256 addressHash, in ValueHash256 fromPath, in ValueHash256 toPath) =>
+            throw new InvalidOperationException("Range deletion not available in preimage mode");
     }
 
     public struct FakeHashFlatReader<TFlatReader>(

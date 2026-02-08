@@ -17,7 +17,6 @@ using Nethermind.State.SnapServer;
 using Nethermind.Synchronization.FastSync;
 using Nethermind.Synchronization.SnapSync;
 using Nethermind.Trie;
-using Nethermind.Trie.Pruning;
 using NSubstitute;
 using NUnit.Framework;
 
@@ -46,7 +45,7 @@ public class SnapServerTest
 
         INodeStorage nodeStorage = new NodeStorage(clientStateDb);
 
-        SnapProvider snapProvider = new(progressTracker, new MemDb(), nodeStorage, LimboLogs.Instance);
+        SnapProvider snapProvider = new(progressTracker, new MemDb(), new PatriciaSnapTrieFactory(nodeStorage, LimboLogs.Instance), LimboLogs.Instance);
 
         return new Context
         {
@@ -272,7 +271,7 @@ public class SnapServerTest
         IDb stateDb2 = new MemDb();
 
         using ProgressTracker progressTracker = new(stateDb2, new TestSyncConfig(), new StateSyncPivot(null!, new TestSyncConfig(), LimboLogs.Instance), LimboLogs.Instance);
-        SnapProvider snapProvider = new(progressTracker, codeDb2, new NodeStorage(stateDb2), LimboLogs.Instance);
+        SnapProvider snapProvider = new(progressTracker, codeDb2, new PatriciaSnapTrieFactory(new NodeStorage(stateDb2), LimboLogs.Instance), LimboLogs.Instance);
 
         (IOwnedReadOnlyList<IOwnedReadOnlyList<PathWithStorageSlot>> storageSlots, IOwnedReadOnlyList<byte[]>? proofs) =
             server.GetStorageRanges(inputStateTree.RootHash, [TestItem.Tree.AccountsWithPaths[0]],
@@ -337,7 +336,7 @@ public class SnapServerTest
         IDb codeDb2 = new MemDb();
 
         using ProgressTracker progressTracker = new(stateDb2, new TestSyncConfig(), new StateSyncPivot(null!, new TestSyncConfig(), LimboLogs.Instance), LimboLogs.Instance);
-        SnapProvider snapProvider = new(progressTracker, codeDb2, new NodeStorage(stateDb2), LimboLogs.Instance);
+        SnapProvider snapProvider = new(progressTracker, codeDb2, new PatriciaSnapTrieFactory(new NodeStorage(stateDb2), LimboLogs.Instance), LimboLogs.Instance);
 
         Hash256 startRange = Keccak.Zero;
         while (true)
@@ -391,7 +390,7 @@ public class SnapServerTest
         for (int i = 1000; i < 10000; i += 1000)
         {
             Address address = TestItem.GetRandomAddress();
-            StorageTree storageTree = new(store.GetTrieStore(address), LimboLogs.Instance);
+            StorageTree storageTree = new(store.GetTrieStore(address.ToAccountPath.ToCommitment()), LimboLogs.Instance);
             for (int j = 0; j < i; j += 1)
             {
                 storageTree.Set(TestItem.GetRandomKeccak(), TestItem.GetRandomKeccak().Bytes.ToArray());

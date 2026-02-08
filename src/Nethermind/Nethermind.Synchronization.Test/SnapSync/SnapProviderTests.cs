@@ -21,20 +21,47 @@ using Nethermind.Core.Test.Builders;
 using Nethermind.Db;
 using Nethermind.Serialization.Rlp;
 using Nethermind.State;
+using Nethermind.State.Flat;
+using Nethermind.State.Flat.Persistence;
+using Nethermind.State.Flat.Sync;
 using Nethermind.State.SnapServer;
+using Nethermind.Trie.Pruning;
 using AccountRange = Nethermind.State.Snap.AccountRange;
 
 namespace Nethermind.Synchronization.Test.SnapSync;
 
-[TestFixture]
-public class SnapProviderTests
+[TestFixture(true)]
+[TestFixture(false)]
+public class SnapProviderTests(bool useFlat)
 {
+
+    private ContainerBuilder CreateContainerBuilder(TestSyncConfig? testSyncConfig = null)
+    {
+        TestSyncConfig testConfig = testSyncConfig ?? new TestSyncConfig();
+
+        ContainerBuilder builder = new ContainerBuilder()
+            .AddModule(new TestSynchronizerModule(testConfig));
+
+        if (useFlat)
+        {
+            builder = builder
+                .AddSingleton<IColumnsDb<FlatDbColumns>>((_) => new TestMemColumnsDb<FlatDbColumns>())
+                .AddSingleton<IPersistence, RocksDbPersistence>()
+                .AddSingleton<ISnapTrieFactory, FlatSnapTrieFactory>();
+        }
+
+        return builder;
+    }
+
+    private IContainer CreateContainer(TestSyncConfig? testSyncConfig = null)
+    {
+        return CreateContainerBuilder(testSyncConfig).Build();
+    }
+
     [Test]
     public void AddAccountRange_AccountListIsEmpty_ThrowArgumentException()
     {
-        using IContainer container = new ContainerBuilder()
-            .AddModule(new TestSynchronizerModule(new TestSyncConfig()))
-            .Build();
+        using IContainer container = CreateContainer();
 
         SnapProvider snapProvider = container.Resolve<SnapProvider>();
 
@@ -50,9 +77,7 @@ public class SnapProviderTests
     [Test]
     public void AddAccountRange_ResponseHasEmptyListOfAccountsAndOneProof_ReturnsExpiredRootHash()
     {
-        using IContainer container = new ContainerBuilder()
-            .AddModule(new TestSynchronizerModule(new TestSyncConfig()))
-            .Build();
+        using IContainer container = CreateContainer();
 
         SnapProvider snapProvider = container.Resolve<SnapProvider>();
 
@@ -67,9 +92,7 @@ public class SnapProviderTests
     [Test]
     public void AddStorageRange_ResponseReversedOrderedListOfAccounts_ReturnsInvalidOrder()
     {
-        using IContainer container = new ContainerBuilder()
-            .AddModule(new TestSynchronizerModule(new TestSyncConfig()))
-            .Build();
+        using IContainer container = CreateContainer();
 
         SnapProvider snapProvider = container.Resolve<SnapProvider>();
         ProgressTracker progressTracker = container.Resolve<ProgressTracker>();
@@ -100,9 +123,7 @@ public class SnapProviderTests
     [Test]
     public void AddStorageRange_EmptySlotsList_ReturnsEmptySlots()
     {
-        using IContainer container = new ContainerBuilder()
-            .AddModule(new TestSynchronizerModule(new TestSyncConfig()))
-            .Build();
+        using IContainer container = CreateContainer();
 
         SnapProvider snapProvider = container.Resolve<SnapProvider>();
         ProgressTracker progressTracker = container.Resolve<ProgressTracker>();
@@ -140,11 +161,10 @@ public class SnapProviderTests
 
         (SnapServer ss, Hash256 root) = BuildSnapServerFromEntries(entries);
 
-        using IContainer container = new ContainerBuilder()
-            .AddModule(new TestSynchronizerModule(new TestSyncConfig()
-            {
-                SnapSyncAccountRangePartitionCount = 1
-            }))
+        using IContainer container = CreateContainerBuilder(new TestSyncConfig()
+        {
+            SnapSyncAccountRangePartitionCount = 1
+        })
             .WithSuggestedHeaderOfStateRoot(root)
             .Build();
 
@@ -171,22 +191,23 @@ public class SnapProviderTests
     {
         (Hash256, Account)[] entries =
         [
-            (TestItem.KeccakA, TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
-            (TestItem.KeccakB, TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
-            (TestItem.KeccakC, TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
-            (TestItem.KeccakD, TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
-            (TestItem.KeccakE, TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
-            (TestItem.KeccakF, TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
+            (new Hash256("0fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
+            (new Hash256("2fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
+            (new Hash256("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
+            // Should split it right here
+
+            (new Hash256("9fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
+            (new Hash256("afffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
+            (new Hash256("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), TestItem.GenerateRandomAccount().WithChangedStorageRoot(TestItem.GetRandomKeccak())),
         ];
         Array.Sort(entries, static (e1, e2) => e1.Item1.CompareTo(e2.Item1));
 
         (SnapServer ss, Hash256 root) = BuildSnapServerFromEntries(entries);
 
-        using IContainer container = new ContainerBuilder()
-            .AddModule(new TestSynchronizerModule(new TestSyncConfig()
-            {
-                SnapSyncAccountRangePartitionCount = 2
-            }))
+        using IContainer container = CreateContainerBuilder(new TestSyncConfig()
+        {
+            SnapSyncAccountRangePartitionCount = 2
+        })
             .WithSuggestedHeaderOfStateRoot(root)
             .Build();
 
@@ -196,6 +217,7 @@ public class SnapProviderTests
         (IOwnedReadOnlyList<PathWithAccount> accounts, IOwnedReadOnlyList<byte[]> proofs) = ss.GetAccountRanges(
             root, Keccak.Zero, Keccak.MaxValue, 1.MB(), default);
 
+        // The range given out here should be half.
         progressTracker.IsFinished(out SnapSyncBatch? batch).Should().Be(false);
 
         using AccountsAndProofs accountsAndProofs = new();
@@ -204,7 +226,25 @@ public class SnapProviderTests
 
         snapProvider.AddAccountRange(batch?.AccountRangeRequest!, accountsAndProofs).Should().Be(AddRangeResult.OK);
 
-        container.ResolveNamed<IDb>(DbNames.State).GetAllKeys().Count().Should().Be(6);
+        if (useFlat)
+        {
+            IPersistence persistence = container.Resolve<IPersistence>();
+            using var reader = persistence.CreateReader();
+            int accountCount = 0;
+            using (var accountIterator = reader.CreateAccountIterator(ValueKeccak.Zero, ValueKeccak.MaxValue))
+            {
+                while (accountIterator.MoveNext())
+                {
+                    accountCount++;
+                }
+            }
+
+            Assert.That(accountCount, Is.EqualTo(3));
+        }
+        else
+        {
+            container.ResolveNamed<IDb>(DbNames.State).GetAllKeys().Count().Should().Be(3); // 3 child. Root branch node not saved due to state sync compatibility
+        }
     }
 
     [TestCase("badreq-roothash.zip")]
@@ -225,9 +265,10 @@ public class SnapProviderTests
         List<PathWithAccount> pathWithAccounts = accounts.Select((acc, idx) => new PathWithAccount(paths[idx], acc)).ToList();
         List<byte[]> proofs = asReq.Proofs.Select((str) => Bytes.FromHexString(str)).ToList();
 
-        StateTree stree = new StateTree(new TestRawTrieStore(new TestMemDb()), LimboLogs.Instance);
+        var adapter = new SnapUpperBoundAdapter(new RawScopedTrieStore(new TestMemDb()));
+        StateTree stree = new StateTree(adapter, LimboLogs.Instance);
         SnapProviderHelper.AddAccountRange(
-                stree,
+                new PatriciaSnapStateTree(stree, adapter),
                 0,
                 new ValueHash256(asReq.Root),
                 new ValueHash256(asReq.StartingHash),
