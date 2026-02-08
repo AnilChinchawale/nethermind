@@ -215,7 +215,8 @@ namespace Nethermind.Synchronization.SnapSync
                     if (!moreChildrenToRight && (request.LimitHash == null || request.LimitHash == ValueKeccak.MaxValue) && !isRootPersisted)
                     {
                         // Sometimes the stitching does not work. Likely because part of the storage is using different
-                        // pivot, but also because of stitching bug. So we just force trigger healing and continue on with our lives.
+                        // pivot, sometimes the proof is in a form that we cannot cleanly verify if it should persist or not,
+                        // but also because of stitching bug. So we just force trigger healing and continue on with our lives.
                         _progressTracker.TrackAccountToHeal(request.Accounts[accountIndex].Path);
                     }
 

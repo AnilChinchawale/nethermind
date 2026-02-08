@@ -97,10 +97,14 @@ namespace Nethermind.Synchronization.SnapSync
                 return (AddRangeResult.DifferentRootHash, true, null, null, tree.RootHash);
             }
 
+            StitchBoundaries(sortedBoundaryList, tree, startingHash);
+
+            // The upper bound is used to prevent proof nodes that covers next range from being persisted, except if
+            // this is the last range. This prevent double node writes per path which break flat. It also prevent leaf o
+            // that is after the range from being persisted, which prevent double write again.
             ValueHash256 upperBound = accounts[^1].Path;
             if (upperBound > limitHash) upperBound = limitHash;
             if (!moreChildrenToRight) upperBound = ValueKeccak.MaxValue;
-            StitchBoundaries(sortedBoundaryList, tree, startingHash, upperBound);
             tree.Commit(writeFlags: WriteFlags.DisableWAL, upperBound);
 
             return (AddRangeResult.OK, moreChildrenToRight, accountsWithStorage, codeHashes, null);
@@ -158,7 +162,6 @@ namespace Nethermind.Synchronization.SnapSync
                 }
                 else if (slot.Path < effectiveStartingHash)
                 {
-                    Console.Error.WriteLine("Earlier in storage for some reason");
                     return (AddRangeResult.InvalidOrder, true, null, false);
                 }
 
@@ -174,14 +177,22 @@ namespace Nethermind.Synchronization.SnapSync
                 return (AddRangeResult.DifferentRootHash, true, tree.RootHash, false);
             }
 
-            bool isRootPersisted = false;
+            StitchBoundaries(sortedBoundaryList, tree, effectiveStartingHash);
 
+            // The upper bound is used to prevent proof nodes that covers next range from being persisted, except if
+            // this is the last range. This prevent double node writes per path which break flat. It also prevent leaf o
+            // that is after the range from being persisted, which prevent double write again.
             ValueHash256 upperBound = slots[^1].Path;
             if (upperBound > limitHash) upperBound = effectiveLimitHash;
             if (!moreChildrenToRight) upperBound = ValueKeccak.MaxValue;
-            isRootPersisted = StitchBoundaries(sortedBoundaryList, tree, effectiveStartingHash, upperBound);
-
             tree.Commit(writeFlags: WriteFlags.DisableWAL, upperBound: upperBound);
+
+            bool isRootPersisted = true;
+            if (sortedBoundaryList?.Count > 0)
+            {
+                // check the root proof if it is persisted
+                isRootPersisted = sortedBoundaryList[0].Item1.IsPersisted;
+            }
 
             return (AddRangeResult.OK, moreChildrenToRight, null, isRootPersisted);
         }
@@ -369,7 +380,7 @@ namespace Nethermind.Synchronization.SnapSync
             return dict;
         }
 
-        private static bool StitchBoundaries(List<(TrieNode, TreePath)>? sortedBoundaryList, ISnapTree tree, ValueHash256 startPath, ValueHash256 effectiveUpperLimit)
+        private static bool StitchBoundaries(List<(TrieNode, TreePath)>? sortedBoundaryList, ISnapTree tree, ValueHash256 startPath)
         {
             if (sortedBoundaryList is null || sortedBoundaryList.Count == 0)
             {
@@ -386,28 +397,18 @@ namespace Nethermind.Synchronization.SnapSync
                     INodeData nodeData = node.NodeData;
                     if (nodeData is ExtensionData extensionData)
                     {
-                        // We dont let the proof get persisted if its subtree range goes above the effectiveUpperLimit.
-                        // This is to prevent double proof node persist.
-                        ValueHash256 upperRange = path.Append(extensionData.Key).ToUpperBoundPath();
-                        if (upperRange > effectiveUpperLimit) continue;
-
-                        if (IsChildPersisted(node, ref path, extensionData._value, ExtensionRlpChildIndex, tree, startPath, upperRange))
+                        if (IsChildPersisted(node, ref path, extensionData._value, ExtensionRlpChildIndex, tree, startPath))
                         {
                             node.IsBoundaryProofNode = false;
                         }
                     }
                     else if (nodeData is BranchData branchData)
                     {
-                        // We dont let the proof get persisted if its subtree range goes above the effectiveUpperLimit.
-                        // This is to prevent double proof node persist.
-                        ValueHash256 upperRange = path.ToUpperBoundPath();
-                        if (upperRange > effectiveUpperLimit) continue;
-
                         bool isBoundaryProofNode = false;
                         int ci = 0;
                         foreach (object? o in branchData.Branches)
                         {
-                            if (!IsChildPersisted(node, ref path, o, ci, tree, startPath, upperRange))
+                            if (!IsChildPersisted(node, ref path, o, ci, tree, startPath))
                             {
                                 isBoundaryProofNode = true;
                                 break;
@@ -425,12 +426,6 @@ namespace Nethermind.Synchronization.SnapSync
                     //leading to TrieNodeException after sync (as healing may not get to heal the particular storage trie)
                     if (node.IsLeaf)
                     {
-                        // We dont let the proof get persisted if its subtree range goes above the effectiveUpperLimit.
-                        // This is to prevent double proof node persist.
-                        TreePath fullPath = path.Append(node.Key);
-                        ValueHash256 upperRange = fullPath.ToUpperBoundPath();
-                        if (upperRange > effectiveUpperLimit) continue;
-
                         node.IsPersisted = tree.IsPersisted(path, node.Keccak);
                         node.IsBoundaryProofNode = !node.IsPersisted;
                     }
@@ -453,7 +448,7 @@ namespace Nethermind.Synchronization.SnapSync
             return stitchToTheRoot;
         }
 
-        private static bool IsChildPersisted(TrieNode node, ref TreePath nodePath, object? child, int childIndex, ISnapTree tree, ValueHash256 startPath, ValueHash256 endPath)
+        private static bool IsChildPersisted(TrieNode node, ref TreePath nodePath, object? child, int childIndex, ISnapTree tree, ValueHash256 startPath)
         {
             if (child is TrieNode childNode)
             {
@@ -461,7 +456,7 @@ namespace Nethermind.Synchronization.SnapSync
                 {
                     TreePath childPath = nodePath.Append(childIndex);
                     TreePath fullPath = childPath.Append(childNode.Key);
-                    if (fullPath.Path < startPath || fullPath.Path > endPath)
+                    if (fullPath.Path < startPath)
                     {
                         // When a branch have an inline leaf whose full path is < startPath,
                         // we cannot mark it as persisted and cause the branch proof to be persisted. This is because

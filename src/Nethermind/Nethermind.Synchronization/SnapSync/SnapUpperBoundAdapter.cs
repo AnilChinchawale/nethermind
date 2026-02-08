@@ -44,7 +44,9 @@ public class SnapUpperBoundAdapter(IScopedTrieStore baseTrieStore): IScopedTrieS
             ValueHash256 subtreeUpperRange = node.IsBranch ? path.ToUpperBoundPath() : path.Append(node.Key).ToUpperBoundPath();
             if (subtreeUpperRange > subtreeLimit) return node;
 
-            return baseCommitter.CommitNode(ref path, node);
+            node = baseCommitter.CommitNode(ref path, node);
+            node.IsPersisted = true;
+            return node;
         }
     }
 }
