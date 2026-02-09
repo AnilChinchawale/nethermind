@@ -26,13 +26,16 @@ using NUnit.Framework;
 
 namespace Nethermind.Synchronization.Test.FastSync
 {
-    [TestFixtureSource(typeof(StateSyncFeedTestsFixtureSource))]
+    [TestFixture(false, 1, 0)]
+    [TestFixture(false, 1, 100)]
+    [TestFixture(false, 4, 0)]
+    [TestFixture(false, 4, 100)]
     [Parallelizable(ParallelScope.Fixtures)]
     public class StateSyncFeedTests(
-        Action<ContainerBuilder> registerTreeSyncStore,
+        bool useFlat,
         int peerCount,
         int maxNodeLatency)
-        : StateSyncFeedTestsBase(registerTreeSyncStore, peerCount, maxNodeLatency)
+        : StateSyncFeedTestsBase(useFlat, peerCount, maxNodeLatency)
     {
         // Useful for set and forget run. But this test is taking a long time to have it set to other than 1.
         private const int TestRepeatCount = 1;
@@ -61,7 +64,6 @@ namespace Nethermind.Synchronization.Test.FastSync
 
             local.CompareTrees(remote, _logger, "AFTER FIRST SYNC", true);
 
-            local.RootHash = remote.StateTree.RootHash;
             for (byte i = 0; i < 8; i++)
                 remote.StateTree
                     .Set(TestItem.Addresses[i], TrieScenarios.AccountJustState0.WithChangedBalance(i)
@@ -81,7 +83,6 @@ namespace Nethermind.Synchronization.Test.FastSync
 
             local.CompareTrees(remote, _logger, "AFTER SECOND SYNC", true);
 
-            local.RootHash = remote.StateTree.RootHash;
             for (byte i = 0; i < 16; i++)
                 remote.StateTree
                     .Set(TestItem.Addresses[i], TrieScenarios.AccountJustState0.WithChangedBalance(i)
@@ -228,7 +229,6 @@ namespace Nethermind.Synchronization.Test.FastSync
 
             local.CompareTrees(remote, _logger, "AFTER FIRST SYNC");
 
-            local.RootHash = remote.StateTree.RootHash;
             remote.StateTree.Set(TestItem.AddressA, TrieScenarios.AccountJustState0.WithChangedBalance(123.Ether()));
             remote.StateTree.Set(TestItem.AddressB, TrieScenarios.AccountJustState1.WithChangedBalance(123.Ether()));
             remote.StateTree.Set(TestItem.AddressC, TrieScenarios.AccountJustState2.WithChangedBalance(123.Ether()));

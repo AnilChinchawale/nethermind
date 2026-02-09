@@ -40,7 +40,7 @@ using NUnit.Framework;
 namespace Nethermind.Synchronization.Test.FastSync;
 
 public abstract class StateSyncFeedTestsBase(
-    Action<ContainerBuilder> registerTreeSyncStore,
+    bool useFlat = false,
     int defaultPeerCount = 1,
     int defaultPeerMaxRandomLatency = 0)
 {
@@ -48,6 +48,9 @@ public abstract class StateSyncFeedTestsBase(
 
     // Chain length used for test block trees, use a constant to avoid shared state
     private const int TestChainLength = 100;
+
+    // Stored for future flat store support
+    protected bool UseFlat { get; } = useFlat;
 
     protected ILogger _logger;
     protected ILogManager _logManager = null!;
@@ -133,9 +136,9 @@ public abstract class StateSyncFeedTestsBase(
                 $"{GetType().Name}{remote.StateTree.RootHash}{TestChainLength}",
                 () => Build.A.BlockTree().WithStateRoot(remote.StateTree.RootHash).OfChainLength(TestChainLength)))
 
-            .Add<SafeContext>();
+            .Add<SafeContext>()
 
-        registerTreeSyncStore(containerBuilder);
+            .AddSingleton<IStateSyncTestOperation, LocalDbContext>();
 
         containerBuilder.RegisterBuildCallback((ctx) =>
         {

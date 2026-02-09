@@ -9,7 +9,7 @@ namespace Nethermind.Synchronization.Test.FastSync;
 
 public interface IStateSyncTestOperation
 {
-    Hash256 RootHash { get; set; }
+    Hash256 RootHash { get; }
     void UpdateRootHash();
     void Set(Hash256 address, Account? account);
     void Commit();

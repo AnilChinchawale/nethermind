@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2023 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -21,9 +20,9 @@ using NUnit.Framework;
 namespace Nethermind.Synchronization.Test.FastSync;
 
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
-[TestFixtureSource(typeof(TreeSyncStoreTestFixtureSource))]
+[TestFixture(false)]
 [Parallelizable(ParallelScope.All)]
-public class StateSyncFeedHealingTests(Action<ContainerBuilder> registerTreeSyncStore) : StateSyncFeedTestsBase(registerTreeSyncStore)
+public class StateSyncFeedHealingTests(bool useFlat) : StateSyncFeedTestsBase(useFlat)
 {
     [Test]
     public async Task HealTreeWithoutBoundaryProofs()
@@ -170,8 +169,6 @@ public class StateSyncFeedHealingTests(Action<ContainerBuilder> registerTreeSync
 
             startingHashIndex += 1000;
         }
-
-        local.RootHash = finalRootHash;
 
         SafeContext ctx = container.Resolve<SafeContext>();
         await ActivateAndWait(ctx, timeout: 20000);

@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
-using System.Collections;
-using Autofac;
 using Autofac.Features.AttributeFilters;
 using FluentAssertions;
 using Nethermind.Core;
@@ -18,43 +16,17 @@ using NUnit.Framework;
 
 namespace Nethermind.Synchronization.Test.FastSync;
 
-public class TreeSyncStoreTestFixtureSource : IEnumerable
+public class LocalDbContext(
+    [KeyFilter(DbNames.Code)] IDb codeDb,
+    [KeyFilter(DbNames.State)] IDb stateDb,
+    INodeStorage nodeStorage,
+    ILogManager logManager)
+    : IStateSyncTestOperation
 {
-    public static void RegisterPatriciaStore(ContainerBuilder builder) => builder
-        .AddSingleton<ITreeSyncStore, PatriciaTreeSyncStore>()
-        .AddSingleton<IStateSyncTestOperation, LocalDbContext>()
-        ;
-
-    // Future:
-    // public static void RegisterFlatStore(ContainerBuilder builder) =>
-    //     builder.Register(ctx => new FlatTreeSyncStore(...)).As<ITreeSyncStore>().SingleInstance();
-
-    public IEnumerator GetEnumerator()
-    {
-        yield return new TestFixtureData((Action<ContainerBuilder>)RegisterPatriciaStore)
-            .SetArgDisplayNames("Patricia");
-        // Future: yield return for Flat
-    }
-}
-
-public class LocalDbContext: IStateSyncTestOperation
-{
-    public LocalDbContext(
-        [KeyFilter(DbNames.Code)] IDb codeDb,
-        [KeyFilter(DbNames.State)] IDb stateDb,
-        INodeStorage nodeStorage,
-        ILogManager logManager)
-    {
-        NodeStorage = nodeStorage;
-        CodeDb = (TestMemDb)codeDb;
-        Db = (TestMemDb)stateDb;
-        StateTree = new StateTree(TestTrieStoreFactory.Build(nodeStorage, logManager), logManager);
-    }
-
-    private TestMemDb CodeDb { get; }
-    private TestMemDb Db { get; }
-    private INodeStorage NodeStorage { get; }
-    private StateTree StateTree { get; }
+    private TestMemDb CodeDb { get; } = (TestMemDb)codeDb;
+    private TestMemDb Db { get; } = (TestMemDb)stateDb;
+    private INodeStorage NodeStorage { get; } = nodeStorage;
+    private StateTree StateTree { get; } = new(TestTrieStoreFactory.Build(nodeStorage, logManager), logManager);
 
     public Hash256 RootHash
     {
@@ -103,29 +75,5 @@ public class LocalDbContext: IStateSyncTestOperation
     public void DeleteStateRoot()
     {
         NodeStorage.Set(null, TreePath.Empty, RootHash, null);
-    }
-}
-
-public class StateSyncFeedTestsFixtureSource : IEnumerable
-{
-    private static readonly (int peerCount, int maxLatency)[] PeerConfigs =
-    [
-        (1, 0),
-        (1, 100),
-        (4, 0),
-        (4, 100)
-    ];
-
-    public IEnumerator GetEnumerator()
-    {
-        foreach (var (peerCount, maxLatency) in PeerConfigs)
-        {
-            yield return new TestFixtureData(
-                (Action<ContainerBuilder>)TreeSyncStoreTestFixtureSource.RegisterPatriciaStore,
-                peerCount,
-                maxLatency
-            ).SetArgDisplayNames($"Patricia-{peerCount}peers-{maxLatency}ms");
-            // Future: yield return for Flat
-        }
     }
 }
