@@ -25,6 +25,7 @@ using Nethermind.State.Flat;
 using Nethermind.State.Proofs;
 using Nethermind.State.Flat.Persistence;
 using Nethermind.State.Flat.Sync;
+using Nethermind.State.Flat.Sync.Snap;
 using Nethermind.State.SnapServer;
 using Nethermind.Trie.Pruning;
 using AccountRange = Nethermind.State.Snap.AccountRange;
