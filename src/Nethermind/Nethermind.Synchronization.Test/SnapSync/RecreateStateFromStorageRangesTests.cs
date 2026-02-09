@@ -7,6 +7,7 @@ using System;
 using System.Linq;
 using Autofac;
 using FluentAssertions;
+using Nethermind.Config;
 using Nethermind.Core;
 using Nethermind.Core.Collections;
 using Nethermind.Core.Crypto;
@@ -14,17 +15,22 @@ using Nethermind.Core.Extensions;
 using Nethermind.Core.Test;
 using Nethermind.Core.Test.Builders;
 using Nethermind.Db;
+using Nethermind.Init.Modules;
 using Nethermind.Int256;
 using Nethermind.State;
+using Nethermind.State.Flat;
 using Nethermind.State.Proofs;
 using Nethermind.State.Snap;
 using Nethermind.Synchronization.SnapSync;
 using Nethermind.Trie;
+using NSubstitute;
 using NUnit.Framework;
 
 namespace Nethermind.Synchronization.Test.SnapSync
 {
-    public class RecreateStateFromStorageRangesTests
+    [TestFixture(true)]
+    [TestFixture(false)]
+    public class RecreateStateFromStorageRangesTests(bool useFlat)
     {
         private TestRawTrieStore _store;
         private StateTree _inputStateTree;
@@ -41,11 +47,27 @@ namespace Nethermind.Synchronization.Test.SnapSync
         [OneTimeTearDown]
         public void TearDown() => ((IDisposable)_store)?.Dispose();
 
-        private static ContainerBuilder CreateContainerBuilder() =>
-            new ContainerBuilder()
-                .AddModule(new TestSynchronizerModule(new TestSyncConfig()));
+        private ContainerBuilder CreateContainerBuilder()
+        {
+            ContainerBuilder builder = new ContainerBuilder()
+                .AddModule(new TestSynchronizerModule(new TestSyncConfig()))
+                .AddKeyedSingleton<IDb>(DbNames.State, (_) => (IDb)new TestMemDb());
 
-        private static IContainer CreateContainer() =>
+            if (useFlat)
+            {
+                FlatDbConfig flatDbConfig = new FlatDbConfig();
+                builder
+                    .AddSingleton<IFlatDbConfig>(flatDbConfig)
+                    .AddSingleton<IProcessExitSource>(Substitute.For<Func<IComponentContext, IProcessExitSource>>())
+                    .AddModule(new FlatWorldStateModule(flatDbConfig))
+                    .AddSingleton<IColumnsDb<FlatDbColumns>>((_) => new TestMemColumnsDb<FlatDbColumns>())
+                    ;
+            }
+
+            return builder;
+        }
+
+        private IContainer CreateContainer() =>
             CreateContainerBuilder().Build();
 
         [Test]
@@ -172,10 +194,9 @@ namespace Nethermind.Synchronization.Test.SnapSync
         public void AddStorageRange_WhereProofIsTheSameAsAllKey_ShouldStillStore()
         {
             Hash256 account = TestItem.KeccakA;
-            TestMemDb testMemDb = new();
             using IContainer container = CreateContainerBuilder()
-                .AddSingleton<INodeStorage>(new NodeStorage(testMemDb))
                 .Build();
+            TestMemDb testMemDb = (TestMemDb)container.ResolveKeyed<IDb>(DbNames.State);
             ISnapTrieFactory factory = container.Resolve<ISnapTrieFactory>();
 
             var pathWithAccount = new PathWithAccount(account, new Account(1, 1, new Hash256("0xeb8594ba5b3314111518b584bbd3801fb3aed5970bd8b47fd9ff744505fe101c"), TestItem.KeccakA));
@@ -201,10 +222,10 @@ namespace Nethermind.Synchronization.Test.SnapSync
         public void AddStorageRange_EmptySlots_ReturnsEmptySlots()
         {
             Hash256 account = TestItem.KeccakA;
-            TestMemDb testMemDb = new();
             using IContainer container = CreateContainerBuilder()
-                .AddSingleton<INodeStorage>(new NodeStorage(testMemDb))
                 .Build();
+
+            TestMemDb testMemDb = (TestMemDb)container.ResolveKeyed<IDb>(DbNames.State);
             ISnapTrieFactory factory = container.Resolve<ISnapTrieFactory>();
 
             var pathWithAccount = new PathWithAccount(account, new Account(1, 1, new Hash256("0xeb8594ba5b3314111518b584bbd3801fb3aed5970bd8b47fd9ff744505fe101c"), TestItem.KeccakA));
