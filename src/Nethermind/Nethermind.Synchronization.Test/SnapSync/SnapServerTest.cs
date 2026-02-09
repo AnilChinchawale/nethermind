@@ -9,10 +9,15 @@ using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
 using Nethermind.Core.Test;
 using Nethermind.Core.Test.Builders;
+using Nethermind.Core.Threading;
 using Nethermind.Db;
 using Nethermind.Int256;
 using Nethermind.Logging;
 using Nethermind.State;
+using Nethermind.State.Flat;
+using Nethermind.State.Flat.Persistence;
+using Nethermind.State.Flat.ScopeProvider;
+using Nethermind.State.Flat.Sync;
 using Nethermind.State.Snap;
 using Nethermind.State.SnapServer;
 using Nethermind.Synchronization.FastSync;
@@ -24,7 +29,9 @@ using NUnit.Framework;
 
 namespace Nethermind.Synchronization.Test.SnapSync;
 
-public class SnapServerTest
+[TestFixture(true)]
+[TestFixture(false)]
+public class SnapServerTest(bool useFlat)
 {
     internal interface IWriteBatch : IDisposable
     {
@@ -116,8 +123,158 @@ public class SnapServerTest
         }
     }
 
-    private static ISnapServerContext CreateContext(ILastNStateRootTracker? lastNStateRootTracker = null) =>
-        new TrieSnapServerContext(lastNStateRootTracker);
+    private class TestSnapshotContentTrieStore(SnapshotContent content) : AbstractMinimalTrieStore
+    {
+        public override TrieNode FindCachedOrUnknown(in TreePath path, Hash256 hash) =>
+            content.StateNodes.TryGetValue(path, out TrieNode? node) ? node : new TrieNode(NodeType.Unknown, hash);
+
+        public override byte[]? TryLoadRlp(in TreePath path, Hash256 hash, ReadFlags flags) => null;
+
+        public override ICommitter BeginCommit(TrieNode? root, WriteFlags writeFlags) =>
+            new StateCommitter(content);
+
+        public override ITrieNodeResolver GetStorageTrieNodeResolver(Hash256? address) =>
+            address is null ? this : new TestSnapshotContentStorageTrieStore(content, address);
+
+        private class StateCommitter(SnapshotContent content) : AbstractMinimalCommitter(new ConcurrencyController(1))
+        {
+            public override TrieNode CommitNode(ref TreePath path, TrieNode node)
+            {
+                content.StateNodes[path] = node;
+                return node;
+            }
+        }
+    }
+
+    private class TestSnapshotContentStorageTrieStore(SnapshotContent content, Hash256AsKey addressHash) : AbstractMinimalTrieStore
+    {
+        public override TrieNode FindCachedOrUnknown(in TreePath path, Hash256 hash) =>
+            content.StorageNodes.TryGetValue((addressHash, path), out TrieNode? node) ? node : new TrieNode(NodeType.Unknown, hash);
+
+        public override byte[]? TryLoadRlp(in TreePath path, Hash256 hash, ReadFlags flags) => null;
+
+        public override ICommitter BeginCommit(TrieNode? root, WriteFlags writeFlags) =>
+            new StorageCommitter(content, addressHash);
+
+        private class StorageCommitter(SnapshotContent content, Hash256AsKey addressHash) : AbstractMinimalCommitter(new ConcurrencyController(1))
+        {
+            public override TrieNode CommitNode(ref TreePath path, TrieNode node)
+            {
+                content.StorageNodes[(addressHash, path)] = node;
+                return node;
+            }
+        }
+    }
+
+    private class FlatSnapServerContext : ISnapServerContext
+    {
+        private readonly SnapshotContent _content;
+        private readonly StateTree _tree;
+        private readonly MemDb _clientStateDb;
+        private readonly IResourcePool _resourcePool;
+
+        public ISnapServer Server { get; }
+        public SnapProvider SnapProvider { get; }
+        public Hash256 RootHash => _tree.RootHash;
+        public int PersistedNodeCount => _clientStateDb.Keys.Count;
+
+        internal FlatSnapServerContext(ILastNStateRootTracker? lastNStateRootTracker = null)
+        {
+            _content = new SnapshotContent();
+            var trieStore = new TestSnapshotContentTrieStore(_content);
+            _tree = new StateTree(trieStore, LimboLogs.Instance);
+
+            _resourcePool = Substitute.For<IResourcePool>();
+
+            IFlatStateRootIndex stateRootIndex = Substitute.For<IFlatStateRootIndex>();
+            stateRootIndex.TryGetStateId(Arg.Any<Hash256>(), out Arg.Any<StateId>())
+                .Returns(call =>
+                {
+                    Hash256 hash = call.ArgAt<Hash256>(0);
+                    if (lastNStateRootTracker?.HasStateRoot(hash) == false || _content.StateNodes.IsEmpty)
+                    {
+                        call[1] = default(StateId);
+                        return false;
+                    }
+                    call[1] = new StateId(1, hash);
+                    return true;
+                });
+
+            IFlatDbManager flatDbManager = Substitute.For<IFlatDbManager>();
+            flatDbManager.GatherReadOnlySnapshotBundle(Arg.Any<StateId>())
+                .Returns(_ => CreateReadOnlyBundle());
+
+            MemDb codeDb = new();
+            Server = new FlatSnapServer(flatDbManager, codeDb, stateRootIndex, LimboLogs.Instance);
+
+            _clientStateDb = new MemDb();
+            using ProgressTracker progressTracker = new(_clientStateDb, new TestSyncConfig(), new StateSyncPivot(null!, new TestSyncConfig(), LimboLogs.Instance), LimboLogs.Instance);
+            INodeStorage nodeStorage = new NodeStorage(_clientStateDb);
+            SnapProvider = new SnapProvider(progressTracker, new MemDb(), new PatriciaSnapTrieFactory(nodeStorage, LimboLogs.Instance), LimboLogs.Instance);
+        }
+
+        private ReadOnlySnapshotBundle CreateReadOnlyBundle()
+        {
+            Snapshot snapshot = new(StateId.PreGenesis, new StateId(1, _tree.RootHash), _content, _resourcePool, ResourcePool.Usage.ReadOnlyProcessingEnv);
+            SnapshotPooledList list = new(1);
+            list.Add(snapshot);
+            var persistenceReader = Substitute.For<IPersistence.IPersistenceReader>();
+            return new ReadOnlySnapshotBundle(list, persistenceReader, false);
+        }
+
+        public IWriteBatch BeginWriteBatch() => new WriteBatch(this);
+        public Hash256 GetStorageRoot(Hash256 accountPath) => _tree.Get(accountPath)!.StorageRoot;
+        public void Dispose() { }
+
+        private class WriteBatch(FlatSnapServerContext ctx) : IWriteBatch
+        {
+            private readonly List<(Hash256 Path, Account Account)> _pendingAccounts = new();
+            private readonly Dictionary<Hash256, StorageTree> _storageTrees = new();
+
+            public void SetAccount(Address address, Account account) =>
+                _pendingAccounts.Add((address.ToAccountPath.ToCommitment(), account));
+
+            public void SetAccount(Hash256 accountPath, Account account) =>
+                _pendingAccounts.Add((accountPath, account));
+
+            public void SetSlot(Hash256 storagePath, ValueHash256 slotKey, byte[] value, bool rlpEncode = true)
+            {
+                if (!_storageTrees.TryGetValue(storagePath, out StorageTree? st))
+                {
+                    st = new StorageTree(
+                        new TestSnapshotContentStorageTrieStore(ctx._content, storagePath),
+                        LimboLogs.Instance);
+                    _storageTrees[storagePath] = st;
+                }
+                st.Set(slotKey, value, rlpEncode);
+            }
+
+            public void Dispose()
+            {
+                Dictionary<Hash256, Hash256> storageRoots = new();
+                foreach (var (path, st) in _storageTrees)
+                {
+                    st.Commit();
+                    storageRoots[path] = st.RootHash;
+                }
+
+                foreach (var (path, account) in _pendingAccounts)
+                {
+                    Account finalAccount = storageRoots.TryGetValue(path, out Hash256? root)
+                        ? account.WithChangedStorageRoot(root)
+                        : account;
+                    ctx._tree.Set(path, finalAccount);
+                }
+
+                ctx._tree.Commit();
+            }
+        }
+    }
+
+    private ISnapServerContext CreateContext(ILastNStateRootTracker? lastNStateRootTracker = null) =>
+        useFlat
+            ? new FlatSnapServerContext(lastNStateRootTracker)
+            : new TrieSnapServerContext(lastNStateRootTracker);
 
     private static void FillWithTestAccounts(ISnapServerContext context)
     {
