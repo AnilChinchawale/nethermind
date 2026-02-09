@@ -124,7 +124,6 @@ public abstract class StateSyncFeedTestsBase(
             .AddSingleton<ILogManager>(_logManager)
             .AddSingleton<INodeStorage>((ctx) => new NodeStorage(ctx.ResolveNamed<IDb>(DbNames.State)))
             .AddSingleton<ISnapTrieFactory, PatriciaSnapTrieFactory>()
-            .AddSingleton<LocalDbContext>()
             .AddKeyedSingleton<IDb>(DbNames.Code, (_) => new TestMemDb())
             .AddKeyedSingleton<IDb>(DbNames.State, (_) => new TestMemDb())
 

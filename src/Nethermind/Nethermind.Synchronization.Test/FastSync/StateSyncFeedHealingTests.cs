@@ -34,7 +34,7 @@ public class StateSyncFeedHealingTests(Action<ContainerBuilder> registerTreeSync
         Hash256 rootHash = remote.StateTree.RootHash;
 
         await using IContainer container = PrepareDownloader(remote);
-        LocalDbContext local = container.Resolve<LocalDbContext>();
+        var local = container.Resolve<IStateSyncTestOperation>();
         ISnapTrieFactory snapTrieFactory = container.Resolve<ISnapTrieFactory>();
 
         ProcessAccountRange(remote.StateTree, snapTrieFactory, 1, rootHash, TestItem.Tree.AccountsWithPaths);
@@ -129,7 +129,7 @@ public class StateSyncFeedHealingTests(Action<ContainerBuilder> registerTreeSync
         Hash256 finalRootHash = remote.StateTree.RootHash;
 
         await using IContainer container = PrepareDownloader(remote, syncDispatcherAllocateTimeoutMs: 1000);
-        LocalDbContext local = container.Resolve<LocalDbContext>();
+        var local = container.Resolve<IStateSyncTestOperation>();
         ISnapTrieFactory snapTrieFactory = container.Resolve<ISnapTrieFactory>();
 
         int startingHashIndex = 0;

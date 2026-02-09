@@ -52,7 +52,7 @@ namespace Nethermind.Synchronization.Test.FastSync
 
             await using IContainer container = PrepareDownloader(remote, mock =>
                 mock.SetFilter(((MemDb)remote.StateDb).Keys.Take(((MemDb)remote.StateDb).Keys.Count - 4).Select(HashKey).ToArray()));
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
 
             local.CompareTrees(remote, _logger, "BEFORE FIRST SYNC", true);
 
@@ -121,7 +121,7 @@ namespace Nethermind.Synchronization.Test.FastSync
             testCase.SetupTree(remote.StateTree, remote.TrieStore, remote.CodeDb);
 
             await using IContainer container = PrepareDownloader(remote);
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
 
             local.CompareTrees(remote, _logger, "BEGIN");
 
@@ -137,7 +137,7 @@ namespace Nethermind.Synchronization.Test.FastSync
         {
             RemoteDbContext remote = new(_logManager);
             await using IContainer container = PrepareDownloader(remote);
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
             SafeContext ctx = container.Resolve<SafeContext>();
             await ActivateAndWait(ctx);
             local.CompareTrees(remote, _logger, "END");
@@ -153,7 +153,7 @@ namespace Nethermind.Synchronization.Test.FastSync
 
             await using IContainer container = PrepareDownloader(remote, mock =>
                 mock.SetFilter(new[] { remote.StateTree.RootHash }));
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
             SafeContext ctx = container.Resolve<SafeContext>();
             await ActivateAndWait(ctx, 1000);
 
@@ -178,7 +178,7 @@ namespace Nethermind.Synchronization.Test.FastSync
             testCase.SetupTree(remote.StateTree, remote.TrieStore, remote.CodeDb);
 
             await using IContainer container = PrepareDownloader(remote, static mock => mock.MaxResponseLength = 1);
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
 
             local.CompareTrees(remote, _logger, "BEGIN");
 
@@ -196,7 +196,7 @@ namespace Nethermind.Synchronization.Test.FastSync
             remote.StateTree.Commit();
 
             await using IContainer container = PrepareDownloader(remote);
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
 
             local.CompareTrees(remote, _logger, "BEGIN");
 
@@ -219,7 +219,7 @@ namespace Nethermind.Synchronization.Test.FastSync
 
             await using IContainer container = PrepareDownloader(remote, mock =>
                 mock.SetFilter(((MemDb)remote.StateDb).Keys.Take(((MemDb)remote.StateDb).Keys.Count - 1).Select(k => HashKey(k)).ToArray()));
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
 
             local.CompareTrees(remote, _logger, "BEFORE FIRST SYNC");
 
@@ -279,7 +279,7 @@ namespace Nethermind.Synchronization.Test.FastSync
             remote.StateTree.Commit();
 
             await using IContainer container = PrepareDownloader(remote);
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
 
             local.CompareTrees(remote, _logger, "BEGIN");
 
@@ -304,7 +304,7 @@ namespace Nethermind.Synchronization.Test.FastSync
             remote.StateTree.Commit();
 
             await using IContainer container = PrepareDownloader(remote);
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
 
             local.CompareTrees(remote, _logger, "BEGIN");
 
@@ -332,7 +332,7 @@ namespace Nethermind.Synchronization.Test.FastSync
             remote.StateTree.Commit();
 
             await using IContainer container = PrepareDownloader(remote);
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
 
             local.CompareTrees(remote, _logger, "BEGIN");
 
@@ -359,7 +359,7 @@ namespace Nethermind.Synchronization.Test.FastSync
             remote.StateTree.Commit();
 
             await using IContainer container = PrepareDownloader(remote);
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
 
             local.CompareTrees(remote, _logger, "BEGIN");
 
@@ -432,7 +432,7 @@ namespace Nethermind.Synchronization.Test.FastSync
             state.Commit();
 
             await using IContainer container = PrepareDownloader(remote);
-            LocalDbContext local = container.Resolve<LocalDbContext>();
+            var local = container.Resolve<IStateSyncTestOperation>();
 
             // Local state only have the state
             local.Set(TestItem.KeccakA, Build.An.Account.WithNonce(1).WithStorageRoot(storageTree.RootHash).TestObject);
