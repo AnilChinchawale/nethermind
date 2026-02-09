@@ -20,6 +20,7 @@ using Nethermind.Core.Test.Builders;
 using Nethermind.Core.Test.Modules;
 using Nethermind.Core.Utils;
 using Nethermind.Db;
+using Nethermind.Init.Modules;
 using Nethermind.Int256;
 using Nethermind.Logging;
 using Nethermind.Network.Contract.P2P;
@@ -146,12 +147,11 @@ public abstract class StateSyncFeedTestsBase(
         if (UseFlat)
         {
             containerBuilder
+                .AddModule(new FlatWorldStateModule(new FlatDbConfig()))
                 .AddSingleton<IColumnsDb<FlatDbColumns>>(_ => new TestMemColumnsDb<FlatDbColumns>())
-                .AddSingleton<IPersistence, RocksDbPersistence>()
-                .AddSingleton<IPersistenceManager, NoopPersistenceManager>()
-                .AddSingleton<ITreeSyncStore, FlatTreeSyncStore>()
-                .AddSingleton<ISnapTrieFactory, FlatSnapTrieFactory>()
-                .AddSingleton<IStateSyncTestOperation, FlatLocalDbContext>();
+                .AddSingleton<IStateSyncTestOperation, FlatLocalDbContext>()
+                .AddDecorator<ITreeSyncStore>((ctx, inner) => new ResettableFlatTreeSyncStore(inner, ctx.Resolve<IPersistence>(), ctx.Resolve<IPersistenceManager>(), ctx.Resolve<ILogManager>()))
+                ;
         }
         else
         {
@@ -166,18 +166,6 @@ public abstract class StateSyncFeedTestsBase(
         });
 
         return containerBuilder;
-    }
-
-    /// <summary>
-    /// Stub persistence manager for flat DB tests. FlatTreeSyncStore only uses ResetPersistedStateId().
-    /// </summary>
-    private class NoopPersistenceManager : IPersistenceManager
-    {
-        public IPersistence.IPersistenceReader LeaseReader() => throw new NotSupportedException();
-        public StateId GetCurrentPersistedStateId() => StateId.PreGenesis;
-        public void AddToPersistence(StateId latestSnapshot) { }
-        public StateId FlushToPersistence() => StateId.PreGenesis;
-        public void ResetPersistedStateId() { }
     }
 
     protected async Task ActivateAndWait(SafeContext safeContext, int timeout = TimeoutLength)
@@ -385,5 +373,43 @@ public class RemoteDbContext
     public IDb StateDb => Db;
     public ITrieStore TrieStore { get; }
     public StateTree StateTree { get; }
+}
+
+/// <summary>
+/// Test wrapper around FlatTreeSyncStore that auto-resets after finalization.
+/// Production FlatTreeSyncStore throws on SaveNode after FinalizeSync (one-way flag).
+/// Tests with moving targets need multiple sync rounds, so this wrapper creates a fresh
+/// inner store when the previous one was finalized.
+/// </summary>
+file class ResettableFlatTreeSyncStore(
+    ITreeSyncStore inner,
+    IPersistence persistence,
+    IPersistenceManager persistenceManager,
+    ILogManager logManager) : ITreeSyncStore
+{
+    private ITreeSyncStore _inner = inner;
+
+    public bool NodeExists(Hash256? address, in TreePath path, in ValueHash256 hash) =>
+        _inner.NodeExists(address, path, hash);
+
+    public void SaveNode(Hash256? address, in TreePath path, in ValueHash256 hash, ReadOnlySpan<byte> data)
+    {
+        try
+        {
+            _inner.SaveNode(address, path, hash, data);
+        }
+        catch (InvalidOperationException)
+        {
+            // Previous round finalized — create fresh store for next sync round
+            _inner = new FlatTreeSyncStore(persistence, persistenceManager, logManager);
+            _inner.SaveNode(address, path, hash, data);
+        }
+    }
+
+    public void FinalizeSync(BlockHeader pivotHeader) =>
+        _inner.FinalizeSync(pivotHeader);
+
+    public ITreeSyncVerificationContext CreateVerificationContext(byte[] rootNodeData) =>
+        _inner.CreateVerificationContext(rootNodeData);
 }
 
