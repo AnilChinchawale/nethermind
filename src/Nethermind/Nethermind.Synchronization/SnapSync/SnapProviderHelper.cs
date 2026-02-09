@@ -122,7 +122,7 @@ namespace Nethermind.Synchronization.SnapSync
             if (result != AddRangeResult.OK)
                 return (result, true, false);
 
-            tree.BulkSetAndUpdateRootHash(entries, PatriciaTree.Flags.WasSorted);
+            tree.BulkSetAndUpdateRootHash(entries);
 
             if (tree.RootHash.ValueHash256 != expectedRootHash)
                 return (AddRangeResult.DifferentRootHash, true, false);
@@ -141,7 +141,7 @@ namespace Nethermind.Synchronization.SnapSync
             {
                 if (!moreChildrenToRight) upperBound = ValueKeccak.MaxValue;
             }
-            tree.Commit(writeFlags: WriteFlags.DisableWAL, upperBound);
+            tree.Commit(upperBound);
 
             bool isRootPersisted = sortedBoundaryList is not { Count: > 0 } || sortedBoundaryList[0].Item1.IsPersisted;
             return (AddRangeResult.OK, moreChildrenToRight, isRootPersisted);

@@ -18,16 +18,16 @@ public class PatriciaSnapStorageTree(StorageTree tree, SnapUpperBoundAdapter ada
     public bool IsPersisted(in TreePath path, in ValueHash256 keccak) =>
         adapter.IsPersisted(path, keccak);
 
-    public void BulkSetAndUpdateRootHash(in ArrayPoolListRef<PatriciaTree.BulkSetEntry> entries, PatriciaTree.Flags flags)
+    public void BulkSetAndUpdateRootHash(in ArrayPoolListRef<PatriciaTree.BulkSetEntry> entries)
     {
-        tree.BulkSet(entries, flags);
+        tree.BulkSet(entries, PatriciaTree.Flags.WasSorted);
         tree.UpdateRootHash();
     }
 
-    public void Commit(WriteFlags writeFlags, ValueHash256 upperBound)
+    public void Commit(ValueHash256 upperBound)
     {
         adapter.UpperBound = upperBound;
-        tree.Commit(writeFlags: writeFlags);
+        tree.Commit(writeFlags: WriteFlags.DisableWAL);
     }
 
     public void Dispose() { } // No-op - Patricia doesn't own resources

@@ -5,7 +5,6 @@ using System;
 using Nethermind.Core;
 using Nethermind.Core.Collections;
 using Nethermind.Core.Crypto;
-using Nethermind.Db;
 using Nethermind.Trie;
 
 namespace Nethermind.Synchronization.SnapSync;
@@ -19,6 +18,6 @@ public interface ISnapTree : IDisposable
 
     void SetRootFromProof(TrieNode root);
     bool IsPersisted(in TreePath path, in ValueHash256 keccak);
-    void BulkSetAndUpdateRootHash(in ArrayPoolListRef<PatriciaTree.BulkSetEntry> entries, PatriciaTree.Flags flags);
-    void Commit(WriteFlags writeFlags, ValueHash256 upperBound);
+    void BulkSetAndUpdateRootHash(in ArrayPoolListRef<PatriciaTree.BulkSetEntry> entries);
+    void Commit(ValueHash256 upperBound);
 }
