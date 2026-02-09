@@ -51,7 +51,9 @@ namespace Nethermind.Synchronization.Test.SnapSync
         {
             ContainerBuilder builder = new ContainerBuilder()
                 .AddModule(new TestSynchronizerModule(new TestSyncConfig()))
-                .AddKeyedSingleton<IDb>(DbNames.State, (_) => (IDb)new TestMemDb());
+                .AddKeyedSingleton<IDb>(DbNames.State, (_) => (IDb)new TestMemDb())
+                .AddSingleton<ISnapTestHelper, PatriciaSnapTestHelper>()
+                ;
 
             if (useFlat)
             {
@@ -61,6 +63,7 @@ namespace Nethermind.Synchronization.Test.SnapSync
                     .AddSingleton<IProcessExitSource>(Substitute.For<Func<IComponentContext, IProcessExitSource>>())
                     .AddModule(new FlatWorldStateModule(flatDbConfig))
                     .AddSingleton<IColumnsDb<FlatDbColumns>>((_) => new TestMemColumnsDb<FlatDbColumns>())
+                    .AddSingleton<ISnapTestHelper, FlatSnapTestHelper>()
                     ;
             }
 
@@ -196,7 +199,7 @@ namespace Nethermind.Synchronization.Test.SnapSync
             Hash256 account = TestItem.KeccakA;
             using IContainer container = CreateContainerBuilder()
                 .Build();
-            TestMemDb testMemDb = (TestMemDb)container.ResolveKeyed<IDb>(DbNames.State);
+            ISnapTestHelper helper = container.Resolve<ISnapTestHelper>();
             ISnapTrieFactory factory = container.Resolve<ISnapTrieFactory>();
 
             var pathWithAccount = new PathWithAccount(account, new Account(1, 1, new Hash256("0xeb8594ba5b3314111518b584bbd3801fb3aed5970bd8b47fd9ff744505fe101c"), TestItem.KeccakA));
@@ -215,7 +218,7 @@ namespace Nethermind.Synchronization.Test.SnapSync
 
             result.Should().Be(AddRangeResult.OK);
             moreChildrenToRight.Should().BeFalse();
-            testMemDb.WritesCount.Should().Be(1);
+            helper.TrieNodeWritesCount.Should().Be(1);
         }
 
         [Test]
@@ -225,7 +228,7 @@ namespace Nethermind.Synchronization.Test.SnapSync
             using IContainer container = CreateContainerBuilder()
                 .Build();
 
-            TestMemDb testMemDb = (TestMemDb)container.ResolveKeyed<IDb>(DbNames.State);
+            ISnapTestHelper helper = container.Resolve<ISnapTestHelper>();
             ISnapTrieFactory factory = container.Resolve<ISnapTrieFactory>();
 
             var pathWithAccount = new PathWithAccount(account, new Account(1, 1, new Hash256("0xeb8594ba5b3314111518b584bbd3801fb3aed5970bd8b47fd9ff744505fe101c"), TestItem.KeccakA));
@@ -238,7 +241,7 @@ namespace Nethermind.Synchronization.Test.SnapSync
                 proofs: null);
 
             result.Should().Be(AddRangeResult.EmptyRange);
-            testMemDb.WritesCount.Should().Be(0); // No writes should happen
+            helper.TrieNodeWritesCount.Should().Be(0); // No writes should happen
         }
 
         private static StorageRange PrepareStorageRequest(ValueHash256 accountPath, Hash256 storageRoot, ValueHash256 startingHash)
