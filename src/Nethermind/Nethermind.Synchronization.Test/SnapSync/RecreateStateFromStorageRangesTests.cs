@@ -170,10 +170,12 @@ namespace Nethermind.Synchronization.Test.SnapSync
             TestMemDb testMemDb = new();
             var adapter = new SnapUpperBoundAdapter(new RawScopedTrieStore(new NodeStorage(testMemDb), account));
             StorageTree tree = new(adapter, LimboLogs.Instance);
+            var factory = new TestSnapTrieFactory(() => new PatriciaSnapStorageTree(tree, adapter));
 
+            var pathWithAccount = new PathWithAccount(account, new Account(1, 1, new Hash256("0xeb8594ba5b3314111518b584bbd3801fb3aed5970bd8b47fd9ff744505fe101c"), TestItem.KeccakA));
             (AddRangeResult result, bool moreChildrenToRight, Hash256 _, bool rootFinished) = SnapProviderHelper.AddStorageRange(
-                new PatriciaSnapStorageTree(tree, adapter),
-                new PathWithAccount(account, new Account(1, 1, new Hash256("0xeb8594ba5b3314111518b584bbd3801fb3aed5970bd8b47fd9ff744505fe101c"), TestItem.KeccakA)),
+                factory,
+                pathWithAccount,
                 [
                     new PathWithStorageSlot(new ValueHash256("0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563"), Bytes.FromHexString("94654f75e491acf8c380d2a6906e67e2e56813665e")),
                 ],
@@ -196,10 +198,12 @@ namespace Nethermind.Synchronization.Test.SnapSync
             TestMemDb testMemDb = new();
             var adapter = new SnapUpperBoundAdapter(new RawScopedTrieStore(new NodeStorage(testMemDb), account));
             StorageTree tree = new(adapter, LimboLogs.Instance);
+            var factory = new TestSnapTrieFactory(() => new PatriciaSnapStorageTree(tree, adapter));
 
+            var pathWithAccount = new PathWithAccount(account, new Account(1, 1, new Hash256("0xeb8594ba5b3314111518b584bbd3801fb3aed5970bd8b47fd9ff744505fe101c"), TestItem.KeccakA));
             (AddRangeResult result, bool moreChildrenToRight, Hash256 _, bool rootFinished) = SnapProviderHelper.AddStorageRange(
-                new PatriciaSnapStorageTree(tree, adapter),
-                new PathWithAccount(account, new Account(1, 1, new Hash256("0xeb8594ba5b3314111518b584bbd3801fb3aed5970bd8b47fd9ff744505fe101c"), TestItem.KeccakA)),
+                factory,
+                pathWithAccount,
                 Array.Empty<PathWithStorageSlot>(), // Empty slots list
                 Keccak.Zero,
                 null,

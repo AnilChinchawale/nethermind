@@ -330,8 +330,9 @@ public class SnapProviderTests(bool useFlat)
 
         var adapter = new SnapUpperBoundAdapter(new RawScopedTrieStore(new TestMemDb()));
         StateTree stree = new StateTree(adapter, LimboLogs.Instance);
+        var factory = new TestSnapTrieFactory(() => new PatriciaSnapStateTree(stree, adapter));
         SnapProviderHelper.AddAccountRange(
-                new PatriciaSnapStateTree(stree, adapter),
+                factory,
                 0,
                 new ValueHash256(asReq.Root),
                 new ValueHash256(asReq.StartingHash),

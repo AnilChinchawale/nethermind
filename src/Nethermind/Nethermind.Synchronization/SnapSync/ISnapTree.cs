@@ -19,7 +19,6 @@ public interface ISnapTree : IDisposable
 
     void SetRootFromProof(TrieNode root);
     bool IsPersisted(in TreePath path, in ValueHash256 keccak);
-    void BulkSet(in ArrayPoolListRef<PatriciaTree.BulkSetEntry> entries, PatriciaTree.Flags flags);
-    void UpdateRootHash();
+    void BulkSetAndUpdateRootHash(in ArrayPoolListRef<PatriciaTree.BulkSetEntry> entries, PatriciaTree.Flags flags);
     void Commit(WriteFlags writeFlags, ValueHash256 upperBound);
 }

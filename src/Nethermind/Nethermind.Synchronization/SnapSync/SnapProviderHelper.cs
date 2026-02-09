@@ -21,7 +21,7 @@ namespace Nethermind.Synchronization.SnapSync
         private const int ExtensionRlpChildIndex = 1;
 
         public static (AddRangeResult result, bool moreChildrenToRight, List<PathWithAccount> storageRoots, List<ValueHash256> codeHashes, Hash256 actualRootHash) AddAccountRange(
-            ISnapTree tree,
+            ISnapTrieFactory factory,
             long blockNumber,
             in ValueHash256 expectedRootHash,
             in ValueHash256 startingHash,
@@ -30,7 +30,7 @@ namespace Nethermind.Synchronization.SnapSync
             IReadOnlyList<byte[]> proofs = null
         )
         {
-            using var treeDisposer = tree;  // Ensures disposal when method exits
+            using ISnapTree tree = factory.CreateStateTree();
 
             using ArrayPoolListRef<PatriciaTree.BulkSetEntry> entries = new(accounts.Count);
             for (var index = 0; index < accounts.Count; index++)
@@ -64,7 +64,7 @@ namespace Nethermind.Synchronization.SnapSync
         }
 
         public static (AddRangeResult result, bool moreChildrenToRight, Hash256 actualRootHash, bool isRootPersisted) AddStorageRange(
-            ISnapTree tree,
+            ISnapTrieFactory factory,
             PathWithAccount account,
             IReadOnlyList<PathWithStorageSlot> slots,
             in ValueHash256? startingHash,
@@ -72,7 +72,7 @@ namespace Nethermind.Synchronization.SnapSync
             IReadOnlyList<byte[]>? proofs = null
         )
         {
-            using var treeDisposer = tree;  // Ensures disposal when method exits
+            using ISnapTree tree = factory.CreateStorageTree(account.Path);
 
             ValueHash256 effectiveLimitHash = limitHash ?? Keccak.MaxValue;
             ValueHash256 effectiveStartingHash = startingHash ?? ValueKeccak.Zero;
@@ -122,8 +122,7 @@ namespace Nethermind.Synchronization.SnapSync
             if (result != AddRangeResult.OK)
                 return (result, true, false);
 
-            tree.BulkSet(entries, PatriciaTree.Flags.WasSorted);
-            tree.UpdateRootHash();
+            tree.BulkSetAndUpdateRootHash(entries, PatriciaTree.Flags.WasSorted);
 
             if (tree.RootHash.ValueHash256 != expectedRootHash)
                 return (AddRangeResult.DifferentRootHash, true, false);

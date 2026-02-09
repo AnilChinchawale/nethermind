@@ -16,8 +16,6 @@ using Nethermind.Db;
 using Nethermind.Int256;
 using Nethermind.Logging;
 using Nethermind.State.Snap;
-using Nethermind.Trie;
-using Nethermind.Trie.Pruning;
 
 namespace Nethermind.Synchronization.SnapSync
 {
@@ -87,12 +85,10 @@ namespace Nethermind.Synchronization.SnapSync
         {
             if (accounts.Count == 0)
                 throw new ArgumentException("Cannot be empty.", nameof(accounts));
-            ISnapTree tree = _trieFactory.CreateStateTree();
-
             ValueHash256 effectiveHashLimit = hashLimit ?? ValueKeccak.MaxValue;
 
             (AddRangeResult result, bool moreChildrenToRight, List<PathWithAccount> accountsWithStorage, List<ValueHash256> codeHashes, Hash256 actualRootHash) =
-                SnapProviderHelper.AddAccountRange(tree, blockNumber, expectedRootHash, startingHash, effectiveHashLimit, accounts, proofs);
+                SnapProviderHelper.AddAccountRange(_trieFactory, blockNumber, expectedRootHash, startingHash, effectiveHashLimit, accounts, proofs);
 
             if (result == AddRangeResult.OK)
             {
@@ -196,11 +192,10 @@ namespace Nethermind.Synchronization.SnapSync
         public AddRangeResult AddStorageRangeForAccount(StorageRange request, int accountIndex, IReadOnlyList<PathWithStorageSlot> slots, IReadOnlyList<byte[]>? proofs = null)
         {
             PathWithAccount pathWithAccount = request.Accounts[accountIndex];
-            ISnapTree tree = _trieFactory.CreateStorageTree(pathWithAccount.Path);
 
             try
             {
-                (AddRangeResult result, bool moreChildrenToRight, Hash256 actualRootHash, bool isRootPersisted) = SnapProviderHelper.AddStorageRange(tree, pathWithAccount, slots, request.StartingHash, request.LimitHash, proofs);
+                (AddRangeResult result, bool moreChildrenToRight, Hash256 actualRootHash, bool isRootPersisted) = SnapProviderHelper.AddStorageRange(_trieFactory, pathWithAccount, slots, request.StartingHash, request.LimitHash, proofs);
                 if (result == AddRangeResult.OK)
                 {
                     if (moreChildrenToRight)
@@ -281,15 +276,7 @@ namespace Nethermind.Synchronization.SnapSync
                         continue;
                     }
 
-                    Hash256? storageRoot = _trieFactory.ResolveStorageRoot(nodeData);
-                    if (storageRoot is null)
-                    {
-                        RetryAccountRefresh(requestedPath);
-                        _logger.Warn($"SNAP - Failed to resolve node: {requestedPath.PathAndAccount.Path}:{Bytes.ToHexString(nodeData)}");
-                        continue;
-                    }
-
-                    requestedPath.PathAndAccount.Account = requestedPath.PathAndAccount.Account.WithChangedStorageRoot(storageRoot);
+                    requestedPath.PathAndAccount.Account = requestedPath.PathAndAccount.Account.WithChangedStorageRoot(Keccak.Compute(nodeData));
 
                     if (requestedPath.StorageStartingHash > ValueKeccak.Zero)
                     {
@@ -376,5 +363,6 @@ namespace Nethermind.Synchronization.SnapSync
         {
             _codeExistKeyCache.Clear();
         }
+
     }
 }

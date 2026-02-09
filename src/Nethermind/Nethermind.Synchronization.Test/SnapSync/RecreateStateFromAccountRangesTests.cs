@@ -317,10 +317,12 @@ public class RecreateStateFromAccountRangesTests
 
         PathWithAccount[] receiptAccounts = TestItem.Tree.AccountsWithPaths[0..2];
 
+        TestSnapTrieFactory factory = new TestSnapTrieFactory(() => new PatriciaSnapStateTree(newTree, adapter));
+
         bool HasMoreChildren(ValueHash256 limitHash)
         {
             (AddRangeResult _, bool moreChildrenToRight, IList<PathWithAccount> _, IList<ValueHash256> _, Hash256 _) =
-                SnapProviderHelper.AddAccountRange(new PatriciaSnapStateTree(newTree, adapter), 0, rootHash, Keccak.Zero, limitHash.ToCommitment(), receiptAccounts, proofs);
+                SnapProviderHelper.AddAccountRange(factory, 0, rootHash, Keccak.Zero, limitHash.ToCommitment(), receiptAccounts, proofs);
             return moreChildrenToRight;
         }
 
@@ -366,10 +368,12 @@ public class RecreateStateFromAccountRangesTests
 
         PathWithAccount[] receiptAccounts = { ac1, ac2 };
 
+        var factory = new TestSnapTrieFactory(() => new PatriciaSnapStateTree(newTree, adapter));
+
         bool HasMoreChildren(ValueHash256 limitHash)
         {
             (AddRangeResult _, bool moreChildrenToRight, IList<PathWithAccount> _, IList<ValueHash256> _, Hash256 _) =
-                SnapProviderHelper.AddAccountRange(new PatriciaSnapStateTree(newTree, adapter), 0, rootHash, Keccak.Zero, limitHash.ToCommitment(), receiptAccounts, proofs);
+                SnapProviderHelper.AddAccountRange(factory, 0, rootHash, Keccak.Zero, limitHash.ToCommitment(), receiptAccounts, proofs);
             return moreChildrenToRight;
         }
 

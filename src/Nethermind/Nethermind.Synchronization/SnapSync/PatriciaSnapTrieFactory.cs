@@ -4,7 +4,6 @@
 using Nethermind.Core.Crypto;
 using Nethermind.Logging;
 using Nethermind.State;
-using Nethermind.Trie;
 using Nethermind.Trie.Pruning;
 
 namespace Nethermind.Synchronization.SnapSync;
@@ -25,19 +24,4 @@ public class PatriciaSnapTrieFactory(INodeStorage nodeStorage, ILogManager logMa
         return new PatriciaSnapStorageTree(new StorageTree(adapter, logManager), adapter);
     }
 
-    public Hash256? ResolveStorageRoot(byte[] nodeData)
-    {
-        try
-        {
-            TreePath emptyTreePath = TreePath.Empty;
-            TrieNode node = new(NodeType.Unknown, nodeData, isDirty: true);
-            node.ResolveNode(_stateTrieStore, emptyTreePath);
-            node.ResolveKey(_stateTrieStore, ref emptyTreePath);
-            return node.Keccak;
-        }
-        catch
-        {
-            return null;
-        }
-    }
 }
