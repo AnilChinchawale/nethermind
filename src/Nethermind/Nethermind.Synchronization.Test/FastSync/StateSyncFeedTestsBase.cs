@@ -25,6 +25,9 @@ using Nethermind.Logging;
 using Nethermind.Network.Contract.P2P;
 using Nethermind.Network.P2P.Subprotocols.Snap;
 using Nethermind.State;
+using Nethermind.State.Flat;
+using Nethermind.State.Flat.Persistence;
+using Nethermind.State.Flat.Sync;
 using Nethermind.State.Snap;
 using Nethermind.State.SnapServer;
 using Nethermind.Stats.Model;
@@ -125,10 +128,7 @@ public abstract class StateSyncFeedTestsBase(
                 return syncConfig;
             })
             .AddSingleton<ILogManager>(_logManager)
-            .AddSingleton<INodeStorage>((ctx) => new NodeStorage(ctx.ResolveNamed<IDb>(DbNames.State)))
-            .AddSingleton<ISnapTrieFactory, PatriciaSnapTrieFactory>()
             .AddKeyedSingleton<IDb>(DbNames.Code, (_) => new TestMemDb())
-            .AddKeyedSingleton<IDb>(DbNames.State, (_) => new TestMemDb())
 
             // Use factory function to make it lazy in case test need to replace IBlockTree
             // Cache key includes type name so different inherited test classes don't share the same blocktree
@@ -136,9 +136,29 @@ public abstract class StateSyncFeedTestsBase(
                 $"{GetType().Name}{remote.StateTree.RootHash}{TestChainLength}",
                 () => Build.A.BlockTree().WithStateRoot(remote.StateTree.RootHash).OfChainLength(TestChainLength)))
 
-            .Add<SafeContext>()
+            .Add<SafeContext>();
 
-            .AddSingleton<IStateSyncTestOperation, LocalDbContext>();
+        // State DB and INodeStorage are needed by SynchronizerModule components (e.g. PathNodeRecovery)
+        containerBuilder
+            .AddKeyedSingleton<IDb>(DbNames.State, (_) => new TestMemDb())
+            .AddSingleton<INodeStorage>((ctx) => new NodeStorage(ctx.ResolveNamed<IDb>(DbNames.State)));
+
+        if (UseFlat)
+        {
+            containerBuilder
+                .AddSingleton<IColumnsDb<FlatDbColumns>>(_ => new TestMemColumnsDb<FlatDbColumns>())
+                .AddSingleton<IPersistence, RocksDbPersistence>()
+                .AddSingleton<IPersistenceManager, NoopPersistenceManager>()
+                .AddSingleton<ITreeSyncStore, FlatTreeSyncStore>()
+                .AddSingleton<ISnapTrieFactory, FlatSnapTrieFactory>()
+                .AddSingleton<IStateSyncTestOperation, FlatLocalDbContext>();
+        }
+        else
+        {
+            containerBuilder
+                .AddSingleton<ISnapTrieFactory, PatriciaSnapTrieFactory>()
+                .AddSingleton<IStateSyncTestOperation, LocalDbContext>();
+        }
 
         containerBuilder.RegisterBuildCallback((ctx) =>
         {
@@ -146,6 +166,18 @@ public abstract class StateSyncFeedTestsBase(
         });
 
         return containerBuilder;
+    }
+
+    /// <summary>
+    /// Stub persistence manager for flat DB tests. FlatTreeSyncStore only uses ResetPersistedStateId().
+    /// </summary>
+    private class NoopPersistenceManager : IPersistenceManager
+    {
+        public IPersistence.IPersistenceReader LeaseReader() => throw new NotSupportedException();
+        public StateId GetCurrentPersistedStateId() => StateId.PreGenesis;
+        public void AddToPersistence(StateId latestSnapshot) { }
+        public StateId FlushToPersistence() => StateId.PreGenesis;
+        public void ResetPersistedStateId() { }
     }
 
     protected async Task ActivateAndWait(SafeContext safeContext, int timeout = TimeoutLength)

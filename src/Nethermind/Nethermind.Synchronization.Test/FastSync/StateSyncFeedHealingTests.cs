@@ -21,6 +21,7 @@ namespace Nethermind.Synchronization.Test.FastSync;
 
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
 [TestFixture(false)]
+[TestFixture(true)]
 [Parallelizable(ParallelScope.All)]
 public class StateSyncFeedHealingTests(bool useFlat) : StateSyncFeedTestsBase(useFlat)
 {
