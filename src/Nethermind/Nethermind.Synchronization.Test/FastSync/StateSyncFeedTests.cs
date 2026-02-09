@@ -30,6 +30,7 @@ namespace Nethermind.Synchronization.Test.FastSync
     [TestFixture(false, 1, 100)]
     [TestFixture(false, 4, 0)]
     [TestFixture(false, 4, 100)]
+    [TestFixture(true, 1, 0)]
     [Parallelizable(ParallelScope.Fixtures)]
     public class StateSyncFeedTests(
         bool useFlat,
