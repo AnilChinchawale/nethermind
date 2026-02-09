@@ -8,24 +8,30 @@ using System.Collections.Generic;
 using System.Linq;
 using Autofac;
 using FluentAssertions;
+using Nethermind.Config;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Test;
 using Nethermind.Core.Test.Builders;
 using Nethermind.Db;
+using Nethermind.Init.Modules;
 using Nethermind.Int256;
 using Nethermind.Logging;
 using Nethermind.State;
+using Nethermind.State.Flat;
 using Nethermind.State.Proofs;
 using Nethermind.State.Snap;
 using Nethermind.Synchronization.SnapSync;
 using Nethermind.Trie;
 using Nethermind.Trie.Pruning;
+using NSubstitute;
 using NUnit.Framework;
 
 namespace Nethermind.Synchronization.Test.SnapSync;
 
-public class RecreateStateFromAccountRangesTests
+[TestFixture(true)]
+[TestFixture(false)]
+public class RecreateStateFromAccountRangesTests(bool useFlat)
 {
     private StateTree _inputTree;
 
@@ -35,11 +41,26 @@ public class RecreateStateFromAccountRangesTests
         _inputTree = TestItem.Tree.GetStateTree();
     }
 
-    private static ContainerBuilder CreateContainerBuilder() =>
-        new ContainerBuilder()
+    private ContainerBuilder CreateContainerBuilder()
+    {
+        ContainerBuilder builder = new ContainerBuilder()
             .AddModule(new TestSynchronizerModule(new TestSyncConfig()));
 
-    private static IContainer CreateContainer() =>
+        if (useFlat)
+        {
+            FlatDbConfig flatDbConfig = new FlatDbConfig();
+            builder
+                .AddSingleton<IFlatDbConfig>(flatDbConfig)
+                .AddSingleton<IProcessExitSource>(Substitute.For<Func<IComponentContext, IProcessExitSource>>())
+                .AddModule(new FlatWorldStateModule(flatDbConfig))
+                .AddSingleton<IColumnsDb<FlatDbColumns>>((_) => new TestMemColumnsDb<FlatDbColumns>())
+                ;
+        }
+
+        return builder;
+    }
+
+    private IContainer CreateContainer() =>
         CreateContainerBuilder().Build();
 
     private byte[][] CreateProofForPath(ReadOnlySpan<byte> path, StateTree tree = null)

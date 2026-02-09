@@ -435,10 +435,10 @@ namespace Nethermind.Synchronization.Test.FastSync
             var local = container.Resolve<IStateSyncTestOperation>();
 
             // Local state only have the state
-            local.Set(TestItem.KeccakA, Build.An.Account.WithNonce(1).WithStorageRoot(storageTree.RootHash).TestObject);
-            local.Set(TestItem.KeccakB, Build.An.Account.WithNonce(1).TestObject);
-            local.Set(TestItem.KeccakC, Build.An.Account.WithNonce(1).TestObject);
-            local.Commit();
+            local.SetAccountsAndCommit(
+                (TestItem.KeccakA, Build.An.Account.WithNonce(1).WithStorageRoot(storageTree.RootHash).TestObject),
+                (TestItem.KeccakB, Build.An.Account.WithNonce(1).TestObject),
+                (TestItem.KeccakC, Build.An.Account.WithNonce(1).TestObject));
 
             // Local state missing root so that it would start
             local.DeleteStateRoot();

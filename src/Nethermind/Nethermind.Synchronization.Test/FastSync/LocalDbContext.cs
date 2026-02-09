@@ -31,14 +31,16 @@ public class LocalDbContext(
     public Hash256 RootHash
     {
         get => StateTree.RootHash;
-        set => StateTree.RootHash = value;
     }
 
     public void UpdateRootHash() => StateTree.UpdateRootHash();
 
-    public void Set(Hash256 address, Account? account) => StateTree.Set(address, account);
-
-    public void Commit() => StateTree.Commit();
+    public void SetAccountsAndCommit(params (Hash256 Address, Account? Account)[] accounts)
+    {
+        foreach (var (address, account) in accounts)
+            StateTree.Set(address, account);
+        StateTree.Commit();
+    }
 
     public void AssertFlushed()
     {

@@ -11,8 +11,7 @@ public interface IStateSyncTestOperation
 {
     Hash256 RootHash { get; }
     void UpdateRootHash();
-    void Set(Hash256 address, Account? account);
-    void Commit();
+    void SetAccountsAndCommit(params (Hash256 Address, Account? Account)[] accounts);
     void AssertFlushed();
     void CompareTrees(RemoteDbContext remote, ILogger logger, string stage, bool skipLogs = false);
     void DeleteStateRoot();
