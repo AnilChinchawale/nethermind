@@ -21,4 +21,10 @@ public class FlatDbConfig : IFlatDbConfig
     public int TrieWarmerWorkerCount { get; set; } = -1;
     public long BlockCacheSizeBudget { get; set; } = 1.GiB();
     public long TrieCacheMemoryBudget { get; set; } = 512.MiB();
+    public bool EnableLongFinality { get; set; } = false;
+    public int LongFinalityReorgDepth { get; set; } = 90000;
+    public string PersistedSnapshotPath { get; set; } = "snapshots";
+    public long ArenaFileSizeBytes { get; set; } = 4L * 1024 * 1024 * 1024;
+    public bool EnableBloomFilters { get; set; } = true;
+    public double BloomFilterBitsPerKey { get; set; } = 10.0;
 }

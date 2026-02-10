@@ -48,4 +48,22 @@ public interface IFlatDbConfig : IConfig
 
     [ConfigItem(Description = "Verify with trie", DefaultValue = "false")]
     bool VerifyWithTrie { get; set; }
+
+    [ConfigItem(Description = "Enable long finality support with persisted snapshots", DefaultValue = "false")]
+    bool EnableLongFinality { get; set; }
+
+    [ConfigItem(Description = "Max reorg depth for long finality (blocks kept in persisted snapshots)", DefaultValue = "90000")]
+    int LongFinalityReorgDepth { get; set; }
+
+    [ConfigItem(Description = "Path for persisted snapshot arena files (relative to data dir)", DefaultValue = "snapshots")]
+    string PersistedSnapshotPath { get; set; }
+
+    [ConfigItem(Description = "Max arena file size in bytes", DefaultValue = "4294967296")]
+    long ArenaFileSizeBytes { get; set; }
+
+    [ConfigItem(Description = "Enable bloom filters on persisted snapshots for fast negative lookups", DefaultValue = "true")]
+    bool EnableBloomFilters { get; set; }
+
+    [ConfigItem(Description = "Bloom filter bits per key (higher = lower false positive rate, more memory)", DefaultValue = "10")]
+    double BloomFilterBitsPerKey { get; set; }
 }
