@@ -328,6 +328,8 @@ public class PersistenceManager(
 
         if (_logger.IsDebug) _logger.Debug($"Persisting snapshot to file: {snapshot.From} -> {snapshot.To}");
         persistedSnapshotRepository.PersistSnapshot(snapshot);
+        Metrics.PersistedSnapshotWrites++;
+        Metrics.PersistedSnapshotCount = persistedSnapshotRepository.SnapshotCount;
     }
 
     /// <summary>
@@ -346,6 +348,8 @@ public class PersistenceManager(
 
         byte[] mergedData = MergeSnapshotData(older.Data, newer.Data);
         persistedSnapshotRepository.PersistCompactedSnapshot(older.From, newer.To, mergedData, [older.Id, newer.Id]);
+        Metrics.PersistedSnapshotCompactions++;
+        Metrics.PersistedSnapshotCount = persistedSnapshotRepository.SnapshotCount;
     }
 
     /// <summary>
@@ -359,8 +363,12 @@ public class PersistenceManager(
         if (currentPersisted.BlockNumber <= 0) return;
 
         int pruned = persistedSnapshotRepository.PruneBefore(currentPersisted);
-        if (pruned > 0 && _logger.IsDebug)
-            _logger.Debug($"Pruned {pruned} persisted snapshots before block {currentPersisted.BlockNumber}");
+        if (pruned > 0)
+        {
+            Metrics.PersistedSnapshotPrunes += pruned;
+            Metrics.PersistedSnapshotCount = persistedSnapshotRepository.SnapshotCount;
+            if (_logger.IsDebug) _logger.Debug($"Pruned {pruned} persisted snapshots before block {currentPersisted.BlockNumber}");
+        }
     }
 
     /// <summary>

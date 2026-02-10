@@ -89,4 +89,39 @@ public static class Metrics
     [Description("Time spend compaction snapshots for mid compaction")]
     [ExponentialPowerHistogramMetric(Start = 1, Factor = 1.5, Count = 1, LabelNames = [])]
     public static IMetricObserver MidCompactTime { get; set; } = new NoopMetricObserver();
+
+    // --- Persisted snapshot metrics ---
+
+    [GaugeMetric]
+    [Description("Number of persisted snapshots on disk")]
+    public static long PersistedSnapshotCount { get; set; }
+
+    [GaugeMetric]
+    [Description("Estimated disk usage of persisted snapshots in bytes")]
+    public static long PersistedSnapshotDiskBytes { get; set; }
+
+    [DetailedMetric]
+    [CounterMetric]
+    [Description("Number of persisted snapshot compactions performed")]
+    public static long PersistedSnapshotCompactions { get; set; }
+
+    [DetailedMetric]
+    [CounterMetric]
+    [Description("Number of persisted snapshot file writes")]
+    public static long PersistedSnapshotWrites { get; set; }
+
+    [DetailedMetric]
+    [CounterMetric]
+    [Description("Number of persisted snapshot prunes")]
+    public static long PersistedSnapshotPrunes { get; set; }
+
+    [DetailedMetric]
+    [CounterMetric]
+    [Description("Bloom filter negative lookups (definite miss)")]
+    public static long BloomFilterNegatives { get; set; }
+
+    [DetailedMetric]
+    [CounterMetric]
+    [Description("Bloom filter positive lookups (possible hit, proceed to RSST)")]
+    public static long BloomFilterPositives { get; set; }
 }

@@ -65,7 +65,7 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         key[0] = AccountTag;
         address.Bytes.CopyTo(key[1..]);
 
-        if (_bloom is not null && !_bloom.MightContain(key)) return null;
+        if (!BloomCheck(key)) return null;
 
         Rsst.Rsst rsst = new(_data.Span);
         return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
@@ -78,7 +78,7 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         address.Bytes.CopyTo(key[1..]);
         index.ToBigEndian(key.Slice(1 + Address.Size, 32));
 
-        if (_bloom is not null && !_bloom.MightContain(key)) return null;
+        if (!BloomCheck(key)) return null;
 
         Rsst.Rsst rsst = new(_data.Span);
         return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
@@ -90,7 +90,7 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         key[0] = SelfDestructTag;
         address.Bytes.CopyTo(key[1..]);
 
-        if (_bloom is not null && !_bloom.MightContain(key)) return false;
+        if (!BloomCheck(key)) return false;
 
         Rsst.Rsst rsst = new(_data.Span);
         return rsst.TryGet(key, out _);
@@ -103,7 +103,7 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         path.Path.Bytes.CopyTo(key[1..]);
         key[33] = (byte)path.Length;
 
-        if (_bloom is not null && !_bloom.MightContain(key)) return null;
+        if (!BloomCheck(key)) return null;
 
         Rsst.Rsst rsst = new(_data.Span);
         return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
@@ -117,10 +117,24 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         path.Path.Bytes.CopyTo(key[33..]);
         key[65] = (byte)path.Length;
 
-        if (_bloom is not null && !_bloom.MightContain(key)) return null;
+        if (!BloomCheck(key)) return null;
 
         Rsst.Rsst rsst = new(_data.Span);
         return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool BloomCheck(ReadOnlySpan<byte> key)
+    {
+        if (_bloom is null) return true;
+        if (_bloom.MightContain(key))
+        {
+            Metrics.BloomFilterPositives++;
+            return true;
+        }
+
+        Metrics.BloomFilterNegatives++;
+        return false;
     }
 
     /// <summary>
