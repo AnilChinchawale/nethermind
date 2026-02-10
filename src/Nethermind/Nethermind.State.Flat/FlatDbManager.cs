@@ -27,6 +27,7 @@ public class FlatDbManager : IFlatDbManager, IAsyncDisposable
     private readonly ISnapshotRepository _snapshotRepository;
     private readonly ITrieNodeCache _trieNodeCache;
     private readonly IResourcePool _resourcePool;
+    private readonly PersistedSnapshotRepository? _persistedSnapshotRepository;
 
     // Cache for assembling `ReadOnlySnapshotBundle`. Its not actually slow, but its called 1.8k per sec so caching
     // it save a decent amount of CPU.
@@ -64,13 +65,15 @@ public class FlatDbManager : IFlatDbManager, IAsyncDisposable
         IPersistenceManager persistenceManager,
         IFlatDbConfig config,
         ILogManager logManager,
-        bool enableDetailedMetrics)
+        bool enableDetailedMetrics,
+        PersistedSnapshotRepository? persistedSnapshotRepository = null)
     {
         _trieNodeCache = trieNodeCache;
         _snapshotCompactor = snapshotCompactor;
         _snapshotRepository = snapshotRepository;
         _resourcePool = resourcePool;
         _persistenceManager = persistenceManager;
+        _persistedSnapshotRepository = persistedSnapshotRepository;
         _logger = logManager.GetClassLogger<FlatDbManager>();
         _enableDetailedMetrics = enableDetailedMetrics;
 
@@ -295,7 +298,8 @@ public class FlatDbManager : IFlatDbManager, IAsyncDisposable
 
             if (_logger.IsTrace) _logger.Trace($"Gathered {baseBlock}. Got {snapshots.Count} known states, Reader state: {persistenceReader.CurrentState}. Persistence state: {_persistenceManager.GetCurrentPersistedStateId()}");
 
-            ReadOnlySnapshotBundle res = new(snapshots, persistenceReader, _enableDetailedMetrics);
+            PersistedSnapshotList? persistedList = _persistedSnapshotRepository?.CompileSnapshotList();
+            ReadOnlySnapshotBundle res = new(snapshots, persistenceReader, _enableDetailedMetrics, persistedList);
 
             res.TryLease();
             if (!_readonlySnapshotBundleCache.TryAdd(baseBlock, res))
@@ -403,6 +407,7 @@ public class FlatDbManager : IFlatDbManager, IAsyncDisposable
         await _populateTrieNodeCacheTask;
         await _persistenceTask;
 
+        _persistedSnapshotRepository?.Dispose();
         _cancelTokenSource.Dispose();
     }
 }
