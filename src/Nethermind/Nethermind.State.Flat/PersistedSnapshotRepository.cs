@@ -61,6 +61,7 @@ public sealed class PersistedSnapshotRepository : IDisposable
     {
         byte[] data = _arenaManager.Read(entry.Location);
         PersistedSnapshot snapshot = new(entry.Id, entry.From, entry.To, entry.Type, data);
+        snapshot.BuildBloom();
         _snapshots[entry.Id] = snapshot;
     }
 
@@ -112,6 +113,7 @@ public sealed class PersistedSnapshotRepository : IDisposable
             _catalog.Save();
 
             PersistedSnapshot persisted = new(id, snapshot.From, snapshot.To, PersistedSnapshotType.Base, (byte[])rsstData.Clone());
+            persisted.BuildBloom();
             _snapshots[id] = persisted;
             return persisted;
         }
@@ -141,6 +143,7 @@ public sealed class PersistedSnapshotRepository : IDisposable
             }
 
             PersistedSnapshot persisted = new(id, from, to, PersistedSnapshotType.Compacted, (byte[])rsstData.Clone());
+            persisted.BuildBloom();
             _snapshots[id] = persisted;
             return persisted;
         }

@@ -33,6 +33,7 @@ public sealed class PersistedSnapshot : RefCountingDisposable
 
     private readonly Memory<byte> _data;
     private readonly IDisposable? _dataOwner;
+    private SnapshotBloomFilter? _bloom;
 
     public int Id { get; }
     public StateId From { get; }
@@ -40,6 +41,7 @@ public sealed class PersistedSnapshot : RefCountingDisposable
     public PersistedSnapshotType Type { get; }
 
     public ReadOnlyMemory<byte> Data => _data;
+    public SnapshotBloomFilter? Bloom => _bloom;
 
     public PersistedSnapshot(int id, StateId from, StateId to, PersistedSnapshotType type, Memory<byte> data, IDisposable? dataOwner = null)
     {
@@ -51,19 +53,22 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         _dataOwner = dataOwner;
     }
 
+    /// <summary>
+    /// Build and attach a bloom filter from the RSST data for fast negative lookups.
+    /// </summary>
+    public void BuildBloom(double bitsPerKey = 10.0) =>
+        _bloom = SnapshotBloomFilter.BuildFromRsst(_data.Span, bitsPerKey);
+
     public byte[]? TryGetAccount(Address address)
     {
         Span<byte> key = stackalloc byte[1 + Address.Size];
         key[0] = AccountTag;
         address.Bytes.CopyTo(key[1..]);
 
-        Rsst.Rsst rsst = new(_data.Span);
-        if (rsst.TryGet(key, out ReadOnlySpan<byte> value))
-        {
-            return value.ToArray();
-        }
+        if (_bloom is not null && !_bloom.MightContain(key)) return null;
 
-        return null;
+        Rsst.Rsst rsst = new(_data.Span);
+        return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
     }
 
     public byte[]? TryGetSlot(Address address, in UInt256 index)
@@ -73,13 +78,10 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         address.Bytes.CopyTo(key[1..]);
         index.ToBigEndian(key.Slice(1 + Address.Size, 32));
 
-        Rsst.Rsst rsst = new(_data.Span);
-        if (rsst.TryGet(key, out ReadOnlySpan<byte> value))
-        {
-            return value.ToArray();
-        }
+        if (_bloom is not null && !_bloom.MightContain(key)) return null;
 
-        return null;
+        Rsst.Rsst rsst = new(_data.Span);
+        return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
     }
 
     public bool IsSelfDestructed(Address address)
@@ -87,6 +89,8 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         Span<byte> key = stackalloc byte[1 + Address.Size];
         key[0] = SelfDestructTag;
         address.Bytes.CopyTo(key[1..]);
+
+        if (_bloom is not null && !_bloom.MightContain(key)) return false;
 
         Rsst.Rsst rsst = new(_data.Span);
         return rsst.TryGet(key, out _);
@@ -99,13 +103,10 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         path.Path.Bytes.CopyTo(key[1..]);
         key[33] = (byte)path.Length;
 
-        Rsst.Rsst rsst = new(_data.Span);
-        if (rsst.TryGet(key, out ReadOnlySpan<byte> value))
-        {
-            return value.ToArray();
-        }
+        if (_bloom is not null && !_bloom.MightContain(key)) return null;
 
-        return null;
+        Rsst.Rsst rsst = new(_data.Span);
+        return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
     }
 
     public byte[]? TryLoadStorageNodeRlp(Hash256 address, in TreePath path)
@@ -116,13 +117,10 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         path.Path.Bytes.CopyTo(key[33..]);
         key[65] = (byte)path.Length;
 
-        Rsst.Rsst rsst = new(_data.Span);
-        if (rsst.TryGet(key, out ReadOnlySpan<byte> value))
-        {
-            return value.ToArray();
-        }
+        if (_bloom is not null && !_bloom.MightContain(key)) return null;
 
-        return null;
+        Rsst.Rsst rsst = new(_data.Span);
+        return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
     }
 
     /// <summary>
