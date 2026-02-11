@@ -190,62 +190,52 @@ public class PersistedSnapshotManager(
             PersistedSnapshot.StorageNodeTag
         ];
 
-        byte[] columnBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(olderData.Length, newerData.Length));
         byte[] tagKey = new byte[1];
-        try
+        foreach (byte tag in tags)
         {
-            foreach (byte tag in tags)
+            tagKey[0] = tag;
+            bool hasOlder = olderOuter.TryGet(tagKey, out ReadOnlySpan<byte> olderColumn);
+            bool hasNewer = newerOuter.TryGet(tagKey, out ReadOnlySpan<byte> newerColumn);
+
+            int maxColumnSize = olderColumn.Length + newerColumn.Length + 1024;
+            Span<byte> valueSpan = outerBuilder.BeginValueWrite(maxColumnSize);
+            int columnLen;
+
+            if (hasOlder && hasNewer)
             {
-                tagKey[0] = tag;
-                bool hasOlder = olderOuter.TryGet(tagKey, out ReadOnlySpan<byte> olderColumn);
-                bool hasNewer = newerOuter.TryGet(tagKey, out ReadOnlySpan<byte> newerColumn);
-
-                int maxColumnSize = Math.Max(olderColumn.Length, newerColumn.Length) + 1024;
-                Span<byte> valueSpan = outerBuilder.BeginValueWrite(maxColumnSize);
-                int columnLen;
-
-                if (hasOlder && hasNewer)
+                columnLen = tag switch
                 {
-                    columnLen = tag switch
-                    {
-                        PersistedSnapshot.StorageTag => NestedStreamingMergeWithSelfDestruct(olderColumn, newerColumn, columnBuffer, destructedAddresses),
-                        PersistedSnapshot.SelfDestructTag => SelfDestructMerge(olderColumn, newerColumn, columnBuffer),
-                        PersistedSnapshot.StorageNodeTag => NestedStreamingMerge(olderColumn, newerColumn, columnBuffer),
-                        _ => RsstBuilder.StreamingMerge(olderColumn, newerColumn, columnBuffer, 0),
-                    };
-                    columnBuffer.AsSpan(0, columnLen).CopyTo(valueSpan);
-                }
-                else if (hasNewer)
+                    PersistedSnapshot.StorageTag => NestedStreamingMergeWithSelfDestruct(olderColumn, newerColumn, valueSpan, destructedAddresses),
+                    PersistedSnapshot.SelfDestructTag => SelfDestructMerge(olderColumn, newerColumn, valueSpan),
+                    PersistedSnapshot.StorageNodeTag => NestedStreamingMerge(olderColumn, newerColumn, valueSpan),
+                    _ => RsstBuilder.StreamingMerge(olderColumn, newerColumn, valueSpan, 0),
+                };
+            }
+            else if (hasNewer)
+            {
+                columnLen = newerColumn.Length;
+                newerColumn.CopyTo(valueSpan);
+            }
+            else if (hasOlder)
+            {
+                if (tag == PersistedSnapshot.StorageTag && destructedAddresses.Count > 0)
                 {
-                    columnLen = newerColumn.Length;
-                    newerColumn.CopyTo(valueSpan);
-                }
-                else if (hasOlder)
-                {
-                    if (tag == PersistedSnapshot.StorageTag && destructedAddresses.Count > 0)
-                    {
-                        columnLen = FilterDestructedFromNested(olderColumn, columnBuffer, destructedAddresses);
-                        columnBuffer.AsSpan(0, columnLen).CopyTo(valueSpan);
-                    }
-                    else
-                    {
-                        columnLen = olderColumn.Length;
-                        olderColumn.CopyTo(valueSpan);
-                    }
+                    columnLen = FilterDestructedFromNested(olderColumn, valueSpan, destructedAddresses);
                 }
                 else
                 {
-                    valueSpan[0] = 0x00;
-                    valueSpan[1] = 0x01;
-                    columnLen = 2;
+                    columnLen = olderColumn.Length;
+                    olderColumn.CopyTo(valueSpan);
                 }
-
-                outerBuilder.FinishValueWrite(columnLen, tagKey);
             }
-        }
-        finally
-        {
-            System.Buffers.ArrayPool<byte>.Shared.Return(columnBuffer);
+            else
+            {
+                valueSpan[0] = 0x00;
+                valueSpan[1] = 0x01;
+                columnLen = 2;
+            }
+
+            outerBuilder.FinishValueWrite(columnLen, tagKey);
         }
 
         return outerBuilder.Build();
@@ -340,72 +330,66 @@ public class PersistedSnapshotManager(
 
         var lookup = destructedAddresses.GetAlternateLookup<ReadOnlySpan<byte>>();
 
-        byte[] innerMergeBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(older.Length + newer.Length);
-        try
+        using RsstBuilder builder = new(output);
+        using Rsst.Rsst.Enumerator olderEnum = olderRsst.GetEnumerator();
+        using Rsst.Rsst.Enumerator newerEnum = newerRsst.GetEnumerator();
+
+        bool hasOlder = olderEnum.MoveNext();
+        bool hasNewer = newerEnum.MoveNext();
+
+        while (hasOlder && hasNewer)
         {
-            using RsstBuilder builder = new(output);
-            using Rsst.Rsst.Enumerator olderEnum = olderRsst.GetEnumerator();
-            using Rsst.Rsst.Enumerator newerEnum = newerRsst.GetEnumerator();
+            ReadOnlySpan<byte> olderKey = olderEnum.Current.Key;
+            ReadOnlySpan<byte> newerKey = newerEnum.Current.Key;
 
-            bool hasOlder = olderEnum.MoveNext();
-            bool hasNewer = newerEnum.MoveNext();
-
-            while (hasOlder && hasNewer)
+            int cmp = olderKey.SequenceCompareTo(newerKey);
+            if (cmp < 0)
             {
-                ReadOnlySpan<byte> olderKey = olderEnum.Current.Key;
-                ReadOnlySpan<byte> newerKey = newerEnum.Current.Key;
-
-                int cmp = olderKey.SequenceCompareTo(newerKey);
-                if (cmp < 0)
+                // Only in older: skip if destructed
+                if (!lookup.Contains(olderKey))
+                    builder.Add(olderKey, olderEnum.Current.Value);
+                hasOlder = olderEnum.MoveNext();
+            }
+            else if (cmp > 0)
+            {
+                builder.Add(newerKey, newerEnum.Current.Value);
+                hasNewer = newerEnum.MoveNext();
+            }
+            else
+            {
+                if (lookup.Contains(newerKey))
                 {
-                    // Only in older: skip if destructed
-                    if (!lookup.Contains(olderKey))
-                        builder.Add(olderKey, olderEnum.Current.Value);
-                    hasOlder = olderEnum.MoveNext();
-                }
-                else if (cmp > 0)
-                {
+                    // Destructed: use newer only, don't merge inner RSSTs
                     builder.Add(newerKey, newerEnum.Current.Value);
-                    hasNewer = newerEnum.MoveNext();
                 }
                 else
                 {
-                    if (lookup.Contains(newerKey))
-                    {
-                        // Destructed: use newer only, don't merge inner RSSTs
-                        builder.Add(newerKey, newerEnum.Current.Value);
-                    }
-                    else
-                    {
-                        // Not destructed: merge inner RSSTs
-                        int mergedLen = RsstBuilder.StreamingMerge(
-                            olderEnum.Current.Value, newerEnum.Current.Value, innerMergeBuffer, 0);
-                        builder.Add(newerKey, innerMergeBuffer.AsSpan(0, mergedLen));
-                    }
-                    hasOlder = olderEnum.MoveNext();
-                    hasNewer = newerEnum.MoveNext();
+                    // Not destructed: merge inner RSSTs directly into output
+                    int maxInner = olderEnum.Current.Value.Length + newerEnum.Current.Value.Length + 256;
+                    Span<byte> innerSpan = builder.BeginValueWrite(maxInner);
+                    int mergedLen = RsstBuilder.StreamingMerge(
+                        olderEnum.Current.Value, newerEnum.Current.Value, innerSpan, 0);
+                    builder.FinishValueWrite(mergedLen, newerKey);
                 }
-            }
-
-            while (hasOlder)
-            {
-                if (!lookup.Contains(olderEnum.Current.Key))
-                    builder.Add(olderEnum.Current.Key, olderEnum.Current.Value);
                 hasOlder = olderEnum.MoveNext();
-            }
-
-            while (hasNewer)
-            {
-                builder.Add(newerEnum.Current.Key, newerEnum.Current.Value);
                 hasNewer = newerEnum.MoveNext();
             }
+        }
 
-            return builder.Build();
-        }
-        finally
+        while (hasOlder)
         {
-            System.Buffers.ArrayPool<byte>.Shared.Return(innerMergeBuffer);
+            if (!lookup.Contains(olderEnum.Current.Key))
+                builder.Add(olderEnum.Current.Key, olderEnum.Current.Value);
+            hasOlder = olderEnum.MoveNext();
         }
+
+        while (hasNewer)
+        {
+            builder.Add(newerEnum.Current.Key, newerEnum.Current.Value);
+            hasNewer = newerEnum.MoveNext();
+        }
+
+        return builder.Build();
     }
 
     /// <summary>
@@ -449,60 +433,54 @@ public class PersistedSnapshotManager(
             return 2;
         }
 
-        byte[] innerMergeBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(older.Length + newer.Length);
-        try
+        using RsstBuilder builder = new(output);
+        using Rsst.Rsst.Enumerator olderEnum = olderRsst.GetEnumerator();
+        using Rsst.Rsst.Enumerator newerEnum = newerRsst.GetEnumerator();
+
+        bool hasOlder = olderEnum.MoveNext();
+        bool hasNewer = newerEnum.MoveNext();
+
+        while (hasOlder && hasNewer)
         {
-            using RsstBuilder builder = new(output);
-            using Rsst.Rsst.Enumerator olderEnum = olderRsst.GetEnumerator();
-            using Rsst.Rsst.Enumerator newerEnum = newerRsst.GetEnumerator();
+            ReadOnlySpan<byte> olderKey = olderEnum.Current.Key;
+            ReadOnlySpan<byte> newerKey = newerEnum.Current.Key;
 
-            bool hasOlder = olderEnum.MoveNext();
-            bool hasNewer = newerEnum.MoveNext();
-
-            while (hasOlder && hasNewer)
+            int cmp = olderKey.SequenceCompareTo(newerKey);
+            if (cmp < 0)
             {
-                ReadOnlySpan<byte> olderKey = olderEnum.Current.Key;
-                ReadOnlySpan<byte> newerKey = newerEnum.Current.Key;
-
-                int cmp = olderKey.SequenceCompareTo(newerKey);
-                if (cmp < 0)
-                {
-                    builder.Add(olderKey, olderEnum.Current.Value);
-                    hasOlder = olderEnum.MoveNext();
-                }
-                else if (cmp > 0)
-                {
-                    builder.Add(newerKey, newerEnum.Current.Value);
-                    hasNewer = newerEnum.MoveNext();
-                }
-                else
-                {
-                    // Matching address key: merge the inner RSSTs
-                    int mergedLen = RsstBuilder.StreamingMerge(
-                        olderEnum.Current.Value, newerEnum.Current.Value, innerMergeBuffer, 0);
-                    builder.Add(newerKey, innerMergeBuffer.AsSpan(0, mergedLen));
-                    hasOlder = olderEnum.MoveNext();
-                    hasNewer = newerEnum.MoveNext();
-                }
-            }
-
-            while (hasOlder)
-            {
-                builder.Add(olderEnum.Current.Key, olderEnum.Current.Value);
+                builder.Add(olderKey, olderEnum.Current.Value);
                 hasOlder = olderEnum.MoveNext();
             }
-
-            while (hasNewer)
+            else if (cmp > 0)
             {
-                builder.Add(newerEnum.Current.Key, newerEnum.Current.Value);
+                builder.Add(newerKey, newerEnum.Current.Value);
                 hasNewer = newerEnum.MoveNext();
             }
+            else
+            {
+                // Matching address key: merge the inner RSSTs directly into output
+                int maxInner = olderEnum.Current.Value.Length + newerEnum.Current.Value.Length + 256;
+                Span<byte> innerSpan = builder.BeginValueWrite(maxInner);
+                int mergedLen = RsstBuilder.StreamingMerge(
+                    olderEnum.Current.Value, newerEnum.Current.Value, innerSpan, 0);
+                builder.FinishValueWrite(mergedLen, newerKey);
+                hasOlder = olderEnum.MoveNext();
+                hasNewer = newerEnum.MoveNext();
+            }
+        }
 
-            return builder.Build();
-        }
-        finally
+        while (hasOlder)
         {
-            System.Buffers.ArrayPool<byte>.Shared.Return(innerMergeBuffer);
+            builder.Add(olderEnum.Current.Key, olderEnum.Current.Value);
+            hasOlder = olderEnum.MoveNext();
         }
+
+        while (hasNewer)
+        {
+            builder.Add(newerEnum.Current.Key, newerEnum.Current.Value);
+            hasNewer = newerEnum.MoveNext();
+        }
+
+        return builder.Build();
     }
 }
