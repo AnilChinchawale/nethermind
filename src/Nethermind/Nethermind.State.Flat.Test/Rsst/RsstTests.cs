@@ -191,34 +191,37 @@ public class RsstTests
         Assert.Ignore("Internal implementation test");
     }
 
-    [Test]
-    public void Binary_Keys_RoundTrip()
+    [TestCase(100)]
+    [TestCase(1000)]
+    [TestCase(5000)]
+    public void Binary_Keys_RoundTrip(int count)
     {
-        // Generate random keys and sort them (RsstBuilder requires sorted input)
-        (byte[] Key, int Index)[] entries = new (byte[], int)[100];
-        for (int i = 0; i < 100; i++)
+        // Generate random 32-byte keys and 32-byte values, then sort (RsstBuilder requires sorted input)
+        (byte[] Key, byte[] Value)[] entries = new (byte[], byte[])[count];
+        for (int i = 0; i < count; i++)
         {
             entries[i].Key = new byte[32];
+            entries[i].Value = new byte[32];
             Random.Shared.NextBytes(entries[i].Key);
-            entries[i].Index = i;
+            Random.Shared.NextBytes(entries[i].Value);
         }
         Array.Sort(entries, (a, b) => a.Key.AsSpan().SequenceCompareTo(b.Key));
 
         byte[] data = RsstTestUtil.BuildToArray((ref RsstBuilder builder) =>
         {
-            foreach ((byte[] key, int index) in entries)
+            foreach ((byte[] key, byte[] value) in entries)
             {
-                builder.Add(key, BitConverter.GetBytes(index));
+                builder.Add(key, value);
             }
         });
 
         Rsst.Rsst rsst = new(data);
-        Assert.That(rsst.EntryCount, Is.EqualTo(100));
+        Assert.That(rsst.EntryCount, Is.EqualTo(count));
 
-        foreach ((byte[] key, int index) in entries)
+        foreach ((byte[] key, byte[] value) in entries)
         {
             Assert.That(rsst.TryGet(key, out ReadOnlySpan<byte> val), Is.True);
-            Assert.That(BitConverter.ToInt32(val), Is.EqualTo(index));
+            Assert.That(val.SequenceEqual(value), Is.True);
         }
     }
 
