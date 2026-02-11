@@ -34,22 +34,6 @@ public class RsstTests
         Assert.That(readPos, Is.EqualTo(expectedSize));
     }
 
-    [TestCase(0)]
-    [TestCase(1)]
-    [TestCase(127)]
-    [TestCase(128)]
-    [TestCase(16384)]
-    public void Leb128_ReadBackward_RoundTrip(int value)
-    {
-        byte[] buffer = new byte[16];
-        int endPos = Leb128.Write(buffer, 0, value);
-
-        int backPos = endPos;
-        int decoded = Leb128.ReadBackward(buffer, ref backPos);
-        Assert.That(decoded, Is.EqualTo(value));
-        Assert.That(backPos, Is.EqualTo(0));
-    }
-
     [Test]
     public void Empty_Rsst_HasZeroEntries()
     {
@@ -241,56 +225,4 @@ public class RsstTests
         Assert.That(rsst.EntryCount, Is.EqualTo(2));
     }
 
-    [TestCase(50, 200)]   // actual < max, same LEB128 size (both 1-2 bytes)
-    [TestCase(100, 200)]  // actual < max, same LEB128 byte count
-    [TestCase(200, 200)]  // actual == max
-    [TestCase(0, 200)]    // zero actual size
-    [TestCase(1, 16384)]  // actual 1 byte LEB, max 3 byte LEB — padded LEB128
-    public void BeginLargeEntry_FinishEntry_RoundTrip(int actualSize, int maxSize)
-    {
-        RsstBuilder builder = new();
-
-        // Add a normal entry first
-        builder.Add("aaa"u8, "normal"u8);
-
-        // Add a large entry with BeginLargeEntry/FinishEntry
-        byte[] valueData = new byte[actualSize];
-        for (int i = 0; i < actualSize; i++) valueData[i] = (byte)(i & 0xFF);
-
-        Span<byte> dest = builder.BeginLargeEntry("bbb"u8, maxSize);
-        valueData.CopyTo(dest);
-        builder.FinishEntry(actualSize);
-
-        // Add another normal entry after
-        builder.Add("ccc"u8, "after"u8);
-
-        byte[] data = builder.Build();
-        Rsst.Rsst rsst = new(data);
-
-        Assert.That(rsst.EntryCount, Is.EqualTo(3));
-
-        Assert.That(rsst.TryGet("aaa"u8, out ReadOnlySpan<byte> v1), Is.True);
-        Assert.That(Encoding.UTF8.GetString(v1), Is.EqualTo("normal"));
-
-        Assert.That(rsst.TryGet("bbb"u8, out ReadOnlySpan<byte> v2), Is.True);
-        Assert.That(v2.Length, Is.EqualTo(actualSize));
-        Assert.That(v2.SequenceEqual(valueData), Is.True);
-
-        Assert.That(rsst.TryGet("ccc"u8, out ReadOnlySpan<byte> v3), Is.True);
-        Assert.That(Encoding.UTF8.GetString(v3), Is.EqualTo("after"));
-    }
-
-    [TestCase(50, 2)]
-    [TestCase(128, 3)]
-    [TestCase(16384, 3)]
-    public void Leb128_WritePadded_DecodesCorrectly(int value, int targetLength)
-    {
-        byte[] buffer = new byte[16];
-        Leb128.WritePadded(buffer, 0, value, targetLength);
-
-        int pos = 0;
-        int decoded = Leb128.Read(buffer, ref pos);
-        Assert.That(decoded, Is.EqualTo(value));
-        Assert.That(pos, Is.EqualTo(targetLength));
-    }
 }

@@ -7,18 +7,19 @@ using System.Runtime.CompilerServices;
 namespace Nethermind.State.Flat.Rsst;
 
 /// <summary>
-/// Read-only sorted string table. A compact binary format for persisted snapshots.
-/// Layout: [entries...][B-tree index nodes...][footer: root_offset(4) | entry_count(4)]
+/// Recursive Static Sorted Table. A compact binary format for persisted snapshots.
+/// Layout: [Data Region][Index Region (B-tree)][Trailer: IndexSize LEB128, LEB128ByteCount 1 byte]
+///
+/// Entry format (value first, lengths forward-readable from ValueLengthOffset):
+///   [Value][ValueLength: LEB128][KeyLength: LEB128][RemainingKey]
 /// </summary>
 public readonly ref struct Rsst
 {
-    public const int FooterSize = 8; // root_offset(4) + entry_count(4)
     public const int MaxLeafEntries = 64;
-    public const byte LeafNodeType = 0;
-    public const byte InternalNodeType = 1;
 
     private readonly ReadOnlySpan<byte> _data;
-    private readonly int _rootOffset;
+    private readonly int _indexStart;
+    private readonly int _indexEnd;
     private readonly int _entryCount;
 
     public int EntryCount => _entryCount;
@@ -27,172 +28,331 @@ public readonly ref struct Rsst
     public Rsst(ReadOnlySpan<byte> data)
     {
         _data = data;
-        if (data.Length < FooterSize)
+        if (data.Length < 2)
         {
-            _rootOffset = 0;
+            _indexStart = 0;
+            _indexEnd = 0;
             _entryCount = 0;
             return;
         }
 
-        _rootOffset = BinaryPrimitives.ReadInt32LittleEndian(data[^FooterSize..]);
-        _entryCount = BinaryPrimitives.ReadInt32LittleEndian(data[^4..]);
+        // Read trailer: last byte = N (LEB128 byte count), read IndexSize forward from end-1-N
+        int n = data[^1];
+        int trailerSize = n + 1;
+        int lebStart = data.Length - 1 - n;
+        int pos = lebStart;
+        int indexSize = Leb128.Read(data, ref pos);
+
+        _indexEnd = data.Length - trailerSize;
+        _indexStart = _indexEnd - indexSize;
+
+        if (indexSize == 0)
+        {
+            _entryCount = 0;
+        }
+        else
+        {
+            _entryCount = CountEntriesFromTree(data[_indexStart.._indexEnd]);
+        }
     }
 
     public bool TryGet(ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
     {
-        if (_entryCount == 0)
+        if (_entryCount == 0 || _data.Length < 2)
         {
             value = default;
             return false;
         }
 
-        return SearchNode(_rootOffset, key, out value);
+        ReadOnlySpan<byte> indexRegion = _data[_indexStart.._indexEnd];
+        return SearchTree(indexRegion, key, out value);
     }
 
-    private bool SearchNode(int nodeOffset, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    private bool SearchTree(ReadOnlySpan<byte> indexRegion, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
     {
-        byte nodeType = _data[nodeOffset];
-        int pos = nodeOffset + 1;
-
-        if (nodeType == LeafNodeType)
-        {
-            return SearchLeaf(pos, key, out value);
-        }
-
-        return SearchInternal(pos, key, out value);
+        NodeHeader root = ReadNodeHeaderFromEnd(indexRegion);
+        return SearchNode(indexRegion, indexRegion.Length - root.NodeSize, key, out value);
     }
 
-    private bool SearchLeaf(int pos, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    private bool SearchNode(ReadOnlySpan<byte> indexRegion, int nodeOffset, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
     {
-        int numEntries = Leb128.Read(_data, ref pos);
+        ReadOnlySpan<byte> node = indexRegion[nodeOffset..];
+        NodeHeader header = NodeHeader.Read(node);
 
-        for (int i = 0; i < numEntries; i++)
+        if (header.IsLeaf)
+            return SearchLeaf(node, header, key, out value);
+
+        return SearchInternal(indexRegion, node, header, key, out value);
+    }
+
+    private bool SearchLeaf(ReadOnlySpan<byte> node, NodeHeader header, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    {
+        int lo = 0, hi = header.EntryCount - 1;
+        while (lo <= hi)
         {
-            int entryOffset = BinaryPrimitives.ReadInt32LittleEndian(_data[pos..]);
-            pos += 4;
+            int mid = (lo + hi) / 2;
+            ReadOnlySpan<byte> separator = GetSeparator(node, mid, header);
 
-            int entryPos = entryOffset;
-            int keyLen = Leb128.Read(_data, ref entryPos);
-            ReadOnlySpan<byte> entryKey = _data.Slice(entryPos, keyLen);
+            int cmpLen = Math.Min(key.Length, separator.Length);
+            int cmp = key[..cmpLen].SequenceCompareTo(separator[..cmpLen]);
 
-            int cmp = key.SequenceCompareTo(entryKey);
-            if (cmp == 0)
-            {
-                entryPos += keyLen;
-                int valueLen = Leb128.Read(_data, ref entryPos);
-                value = _data.Slice(entryPos, valueLen);
-                return true;
-            }
+            if (cmp == 0 && key.Length < separator.Length)
+                cmp = -1;
+            else if (cmp == 0)
+                return VerifyAndReadEntry(mid, node, header, key, out value);
 
             if (cmp < 0)
-            {
-                // Keys are sorted, so if we've passed it, it's not here
-                value = default;
-                return false;
-            }
+                hi = mid - 1;
+            else
+                lo = mid + 1;
         }
 
         value = default;
         return false;
     }
 
-    private bool SearchInternal(int pos, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    private bool VerifyAndReadEntry(int entryIndex, ReadOnlySpan<byte> node, NodeHeader header, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
     {
-        int numChildren = Leb128.Read(_data, ref pos);
+        ReadOnlySpan<byte> separator = GetSeparator(node, entryIndex, header);
+        int vlOffset = GetValueLengthOffset(node, entryIndex, header);
 
-        // Read first child offset
-        int childOffset = BinaryPrimitives.ReadInt32LittleEndian(_data[pos..]);
-        pos += 4;
+        // Read entry from data region starting at vlOffset
+        ReadEntry(_data, vlOffset, out ReadOnlySpan<byte> remainingKey, out value);
 
-        // For each separator key, decide which child to descend into
-        for (int i = 1; i < numChildren; i++)
+        if (key.Length != separator.Length + remainingKey.Length)
         {
-            int sepKeyLen = Leb128.Read(_data, ref pos);
-            ReadOnlySpan<byte> sepKey = _data.Slice(pos, sepKeyLen);
-            pos += sepKeyLen;
-
-            int nextChildOffset = BinaryPrimitives.ReadInt32LittleEndian(_data[pos..]);
-            pos += 4;
-
-            if (key.SequenceCompareTo(sepKey) < 0)
-            {
-                return SearchNode(childOffset, key, out value);
-            }
-
-            childOffset = nextChildOffset;
+            value = default;
+            return false;
         }
 
-        return SearchNode(childOffset, key, out value);
+        if (!key[..separator.Length].SequenceEqual(separator))
+        {
+            value = default;
+            return false;
+        }
+
+        if (remainingKey.Length > 0 && !key[separator.Length..].SequenceEqual(remainingKey))
+        {
+            value = default;
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool SearchInternal(ReadOnlySpan<byte> indexRegion, ReadOnlySpan<byte> node, NodeHeader header, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    {
+        int childIdx = 0;
+        for (int i = 1; i < header.EntryCount; i++)
+        {
+            ReadOnlySpan<byte> separator = GetSeparator(node, i, header);
+            if (key.SequenceCompareTo(separator) >= 0)
+                childIdx = i;
+            else
+                break;
+        }
+
+        int childOffset = GetChildOffset(node, childIdx, header);
+        return SearchNode(indexRegion, childOffset, key, out value);
+    }
+
+    private static ReadOnlySpan<byte> GetSeparator(ReadOnlySpan<byte> node, int index, NodeHeader header) =>
+        header.Format switch
+        {
+            0 => GetVariableSeparator(node, index, header),
+            1 => GetUniformSeparator(node, index, header, strideExtra: 3),
+            2 => GetUniformSeparator(node, index, header, strideExtra: 2),
+            _ => throw new InvalidDataException($"Unknown node format: {header.Format}")
+        };
+
+    private static ReadOnlySpan<byte> GetVariableSeparator(ReadOnlySpan<byte> node, int index, NodeHeader header)
+    {
+        int offsetTableStart = header.HeaderSize;
+        int entryDataStart = offsetTableStart + header.EntryCount * 2;
+        int relativeOffset = BinaryPrimitives.ReadUInt16LittleEndian(node[(offsetTableStart + index * 2)..]);
+        int entryOffset = entryDataStart + relativeOffset;
+
+        if (!header.IsLeaf && index == 0)
+            return ReadOnlySpan<byte>.Empty;
+
+        int pos = entryOffset;
+        int sepLen = Leb128.Read(node, ref pos);
+        return node.Slice(pos, sepLen);
+    }
+
+    private static ReadOnlySpan<byte> GetUniformSeparator(ReadOnlySpan<byte> node, int index, NodeHeader header, int strideExtra)
+    {
+        int stride = header.SepLen + strideExtra;
+        int entryStart = header.HeaderSize + index * stride;
+        return node.Slice(entryStart, header.SepLen);
+    }
+
+    private static int GetValueLengthOffset(ReadOnlySpan<byte> node, int index, NodeHeader header) =>
+        header.Format switch
+        {
+            0 => GetVariableValueLengthOffset(node, index, header),
+            1 => GetUniformOffset(node, index, header, strideExtra: 3, useUint24: true),
+            2 => GetUniformOffset(node, index, header, strideExtra: 2, useUint24: false),
+            _ => throw new InvalidDataException($"Unknown node format: {header.Format}")
+        };
+
+    private static int GetVariableValueLengthOffset(ReadOnlySpan<byte> node, int index, NodeHeader header)
+    {
+        int offsetTableStart = header.HeaderSize;
+        int entryDataStart = offsetTableStart + header.EntryCount * 2;
+        int relativeOffset = BinaryPrimitives.ReadUInt16LittleEndian(node[(offsetTableStart + index * 2)..]);
+        int entryOffset = entryDataStart + relativeOffset;
+
+        int pos = entryOffset;
+        int sepLen = Leb128.Read(node, ref pos);
+        pos += sepLen;
+        return Leb128.Read(node, ref pos); // ValueLengthOffset (absolute)
+    }
+
+    private static int GetChildOffset(ReadOnlySpan<byte> node, int index, NodeHeader header) =>
+        header.Format switch
+        {
+            0 => GetVariableChildOffset(node, index, header),
+            1 => GetUniformOffset(node, index, header, strideExtra: 3, useUint24: true),
+            2 => GetUniformOffset(node, index, header, strideExtra: 2, useUint24: false),
+            _ => throw new InvalidDataException($"Unknown node format: {header.Format}")
+        };
+
+    private static int GetVariableChildOffset(ReadOnlySpan<byte> node, int index, NodeHeader header)
+    {
+        int offsetTableStart = header.HeaderSize;
+        int entryDataStart = offsetTableStart + header.EntryCount * 2;
+        int relativeOffset = BinaryPrimitives.ReadUInt16LittleEndian(node[(offsetTableStart + index * 2)..]);
+        int entryOffset = entryDataStart + relativeOffset;
+
+        int pos = entryOffset;
+        if (index == 0)
+            return Leb128.Read(node, ref pos);
+
+        int sepLen = Leb128.Read(node, ref pos);
+        pos += sepLen;
+        return Leb128.Read(node, ref pos);
     }
 
     /// <summary>
-    /// Read a key-value entry at a given data offset.
+    /// Read the offset value (ValueLengthOffset or ChildOffset) from a uniform-format node entry.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void ReadEntry(ReadOnlySpan<byte> data, int entryOffset, out ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    private static int GetUniformOffset(ReadOnlySpan<byte> node, int index, NodeHeader header, int strideExtra, bool useUint24)
     {
-        int pos = entryOffset;
-        int keyLen = Leb128.Read(data, ref pos);
-        key = data.Slice(pos, keyLen);
-        pos += keyLen;
-        int valueLen = Leb128.Read(data, ref pos);
-        value = data.Slice(pos, valueLen);
+        int stride = header.SepLen + strideExtra;
+        int offsetPos = header.HeaderSize + index * stride + header.SepLen;
+
+        int relative;
+        if (useUint24)
+        {
+            relative = node[offsetPos] | (node[offsetPos + 1] << 8) | (node[offsetPos + 2] << 16);
+        }
+        else
+        {
+            relative = BinaryPrimitives.ReadUInt16LittleEndian(node[offsetPos..]);
+        }
+
+        return header.BaseOffset + relative;
     }
 
-    public Enumerator GetEnumerator() => new(_data, _rootOffset, _entryCount);
-
-    public ref struct Enumerator
+    private static int CountEntriesFromTree(ReadOnlySpan<byte> indexRegion)
     {
-        private readonly ReadOnlySpan<byte> _data;
-        private readonly int _entryCount;
+        if (indexRegion.Length == 0) return 0;
 
-        // We collect all leaf entry offsets during initialization by walking the tree
-        private readonly int[] _entryOffsets;
-        private int _currentIndex;
+        NodeHeader root = ReadNodeHeaderFromEnd(indexRegion);
+        return CountEntriesInNode(indexRegion, indexRegion.Length - root.NodeSize, root);
+    }
 
-        public Enumerator(ReadOnlySpan<byte> data, int rootOffset, int entryCount)
+    private static int CountEntriesInNode(ReadOnlySpan<byte> indexRegion, int nodeOffset, NodeHeader header)
+    {
+        if (header.IsLeaf) return header.EntryCount;
+
+        int total = 0;
+        for (int i = 0; i < header.EntryCount; i++)
         {
-            _data = data;
-            _entryCount = entryCount;
-            _entryOffsets = new int[entryCount];
-            _currentIndex = -1;
+            ReadOnlySpan<byte> node = indexRegion[nodeOffset..];
+            int childOffset = GetChildOffset(node, i, header);
+            NodeHeader childHeader = NodeHeader.Read(indexRegion[childOffset..]);
+            total += CountEntriesInNode(indexRegion, childOffset, childHeader);
+        }
+        return total;
+    }
 
-            if (entryCount > 0)
+    private static NodeHeader ReadNodeHeaderFromEnd(ReadOnlySpan<byte> indexRegion)
+    {
+        for (int tryStart = indexRegion.Length - 6; tryStart >= 0; tryStart--)
+        {
+            ushort possibleSize = BinaryPrimitives.ReadUInt16LittleEndian(indexRegion[tryStart..]);
+            if (tryStart + possibleSize == indexRegion.Length && possibleSize >= 6)
             {
-                int idx = 0;
-                CollectEntryOffsets(data, rootOffset, _entryOffsets, ref idx);
+                return NodeHeader.Read(indexRegion[tryStart..]);
             }
         }
 
-        private static void CollectEntryOffsets(ReadOnlySpan<byte> data, int nodeOffset, int[] offsets, ref int idx)
-        {
-            byte nodeType = data[nodeOffset];
-            int pos = nodeOffset + 1;
+        return NodeHeader.Read(indexRegion);
+    }
 
-            if (nodeType == LeafNodeType)
+    /// <summary>
+    /// Read a key-value entry given the ValueLengthOffset in the data region.
+    /// Entry format: [Value: V bytes][ValueLength: LEB128][KeyLength: LEB128][RemainingKey: K bytes]
+    /// ValueLengthOffset points to the start of the ValueLength LEB128.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void ReadEntry(ReadOnlySpan<byte> data, int valueLengthOffset, out ReadOnlySpan<byte> remainingKey, out ReadOnlySpan<byte> value)
+    {
+        int pos = valueLengthOffset;
+        int valueLength = Leb128.Read(data, ref pos);
+        int keyLength = Leb128.Read(data, ref pos);
+        remainingKey = data.Slice(pos, keyLength);
+        value = data.Slice(valueLengthOffset - valueLength, valueLength);
+    }
+
+    public Enumerator GetEnumerator() => new(_data, _indexStart, _indexEnd, _entryCount);
+
+    public ref struct Enumerator : IDisposable
+    {
+        private readonly ReadOnlySpan<byte> _data;
+        private readonly (byte[] Separator, int ValueLengthOffset)[] _leafEntries;
+        private int _currentIndex;
+
+        public Enumerator(ReadOnlySpan<byte> data, int indexStart, int indexEnd, int entryCount)
+        {
+            _data = data;
+            _currentIndex = -1;
+
+            if (entryCount <= 0 || indexStart == indexEnd)
             {
-                int numEntries = Leb128.Read(data, ref pos);
-                for (int i = 0; i < numEntries; i++)
+                _leafEntries = [];
+                return;
+            }
+
+            ReadOnlySpan<byte> indexRegion = data[indexStart..indexEnd];
+            List<(byte[] Separator, int ValueLengthOffset)> entries = new(entryCount > 0 ? entryCount : 16);
+            NodeHeader root = ReadNodeHeaderFromEnd(indexRegion);
+            CollectLeafEntries(indexRegion, indexRegion.Length - root.NodeSize, entries);
+            _leafEntries = entries.ToArray();
+        }
+
+        private static void CollectLeafEntries(ReadOnlySpan<byte> indexRegion, int nodeOffset, List<(byte[] Separator, int ValueLengthOffset)> entries)
+        {
+            ReadOnlySpan<byte> node = indexRegion[nodeOffset..];
+            NodeHeader header = NodeHeader.Read(node);
+
+            if (header.IsLeaf)
+            {
+                for (int i = 0; i < header.EntryCount; i++)
                 {
-                    offsets[idx++] = BinaryPrimitives.ReadInt32LittleEndian(data[pos..]);
-                    pos += 4;
+                    byte[] sep = GetSeparator(node, i, header).ToArray();
+                    int vlOffset = GetValueLengthOffset(node, i, header);
+                    entries.Add((sep, vlOffset));
                 }
             }
             else
             {
-                int numChildren = Leb128.Read(data, ref pos);
-                int firstChild = BinaryPrimitives.ReadInt32LittleEndian(data[pos..]);
-                pos += 4;
-
-                CollectEntryOffsets(data, firstChild, offsets, ref idx);
-
-                for (int i = 1; i < numChildren; i++)
+                for (int i = 0; i < header.EntryCount; i++)
                 {
-                    int sepKeyLen = Leb128.Read(data, ref pos);
-                    pos += sepKeyLen;
-                    int childOffset = BinaryPrimitives.ReadInt32LittleEndian(data[pos..]);
-                    pos += 4;
-                    CollectEntryOffsets(data, childOffset, offsets, ref idx);
+                    int childOffset = GetChildOffset(node, i, header);
+                    CollectLeafEntries(indexRegion, childOffset, entries);
                 }
             }
         }
@@ -200,17 +360,26 @@ public readonly ref struct Rsst
         public bool MoveNext()
         {
             _currentIndex++;
-            return _currentIndex < _entryCount;
+            return _currentIndex < _leafEntries.Length;
         }
 
         public readonly KeyValueEntry Current
         {
             get
             {
-                ReadEntry(_data, _entryOffsets[_currentIndex], out ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value);
-                return new KeyValueEntry(key, value);
+                (byte[] separator, int vlOffset) = _leafEntries[_currentIndex];
+
+                ReadEntry(_data, vlOffset, out ReadOnlySpan<byte> remainingKey, out ReadOnlySpan<byte> value);
+
+                byte[] fullKey = new byte[separator.Length + remainingKey.Length];
+                separator.CopyTo(fullKey.AsSpan());
+                remainingKey.CopyTo(fullKey.AsSpan(separator.Length));
+
+                return new KeyValueEntry(fullKey, value);
             }
         }
+
+        public void Dispose() { }
     }
 
     public readonly ref struct KeyValueEntry(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value)
@@ -222,6 +391,48 @@ public readonly ref struct Rsst
         {
             key = Key;
             value = Value;
+        }
+    }
+
+    internal readonly struct NodeHeader
+    {
+        public ushort NodeSize { get; init; }
+        public byte Flags { get; init; }
+        public ushort EntryCount { get; init; }
+        public byte SepLen { get; init; }
+        public int Format => (Flags >> 1) & 0x03;
+        public bool IsLeaf => (Flags & 0x01) != 0;
+        public int BaseOffset { get; init; }
+        public int HeaderSize { get; init; }
+
+        public static NodeHeader Read(ReadOnlySpan<byte> node)
+        {
+            ushort nodeSize = BinaryPrimitives.ReadUInt16LittleEndian(node);
+            byte flags = node[2];
+            ushort entryCount = BinaryPrimitives.ReadUInt16LittleEndian(node[3..]);
+            byte sepLen = node[5];
+            int format = (flags >> 1) & 0x03;
+
+            int baseOffset = 0;
+            int headerSize = 6;
+
+            // BaseOffset only for uniform formats (format != 0)
+            if (format != 0)
+            {
+                int pos = 6;
+                baseOffset = Leb128.Read(node, ref pos);
+                headerSize = pos;
+            }
+
+            return new NodeHeader
+            {
+                NodeSize = nodeSize,
+                Flags = flags,
+                EntryCount = entryCount,
+                SepLen = sepLen,
+                BaseOffset = baseOffset,
+                HeaderSize = headerSize
+            };
         }
     }
 }

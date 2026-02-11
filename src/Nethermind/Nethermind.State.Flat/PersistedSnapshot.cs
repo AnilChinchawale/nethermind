@@ -159,18 +159,18 @@ public sealed class PersistedSnapshot : RefCountingDisposable
     /// Resolve a NodeRef by reading the entry value from the referenced snapshot.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static byte[] ResolveValue(ReadOnlySpan<byte> snapshotData, int entryOffset)
+    public static byte[] ResolveValue(ReadOnlySpan<byte> snapshotData, int valueLengthOffset)
     {
-        Rsst.Rsst.ReadEntry(snapshotData, entryOffset, out _, out ReadOnlySpan<byte> value);
+        Rsst.Rsst.ReadEntry(snapshotData, valueLengthOffset, out _, out ReadOnlySpan<byte> value);
         return value.ToArray();
     }
 
     /// <summary>
-    /// Read the raw entry value at a given offset in this snapshot's data.
+    /// Read the raw entry value at a given ValueLengthOffset in this snapshot's data.
     /// </summary>
-    public byte[] ReadEntryValue(int entryOffset)
+    public byte[] ReadEntryValue(int valueLengthOffset)
     {
-        Rsst.Rsst.ReadEntry(_data.Span, entryOffset, out _, out ReadOnlySpan<byte> value);
+        Rsst.Rsst.ReadEntry(_data.Span, valueLengthOffset, out _, out ReadOnlySpan<byte> value);
         return value.ToArray();
     }
 

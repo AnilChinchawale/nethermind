@@ -6,40 +6,30 @@ using System.Buffers.Binary;
 namespace Nethermind.State.Flat.Rsst;
 
 /// <summary>
-/// Builds an RSST (Read-only Sorted String Table) from key-value entries.
+/// Builds an RSST (Recursive Static Sorted Table) from key-value entries.
 /// Entries MUST be added in sorted key order. No internal sorting is performed.
-/// Writes entries directly to a growable buffer to avoid buffering all entries in memory.
+///
+/// Binary layout:
+///   [Data Region: entries...][Index Region: B-tree nodes...][IndexSize LEB128][LEB128ByteCount: 1 byte]
+///
+/// Entry format (value first, lengths forward-readable from ValueLengthOffset):
+///   [Value][ValueLength: LEB128][KeyLength: LEB128][RemainingKey]
 /// </summary>
 public sealed class RsstBuilder
 {
-    private readonly MemoryStream _dataStream = new();
-    private readonly List<int> _entryOffsets = new();
-    private readonly List<byte[]> _firstKeys = new(); // first key per leaf
-    private readonly List<byte[]> _lastKeys = new();  // last key per leaf
+    private readonly MemoryStream _valueStream = new();
+    private readonly List<(byte[] Key, long ValueOffset, int ValueLength)> _entries = new();
 
-    private byte[]? _lastKey;
-    private int _leafEntryCount;
+    public int EntryCount => _entries.Count;
 
-    // State for BeginLargeEntry/FinishEntry
-    private int _pendingValueLebPosition = -1;
-    private int _pendingValueStart = -1;
-    private int _pendingLebLength;
-
-    public int EntryCount => _entryOffsets.Count;
-
-    private void TrackLeafBoundary(ReadOnlySpan<byte> key)
+    /// <summary>
+    /// Add a key-value pair. Key must be in sorted order.
+    /// </summary>
+    public void Add(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value)
     {
-        if (_leafEntryCount == 0)
-            _firstKeys.Add(key.ToArray());
-        _leafEntryCount++;
-
-        byte[] currentKey = key.ToArray();
-        if (_leafEntryCount >= Rsst.MaxLeafEntries)
-        {
-            _lastKeys.Add(currentKey);
-            _leafEntryCount = 0;
-        }
-        _lastKey = currentKey;
+        long offset = _valueStream.Position;
+        _valueStream.Write(value);
+        _entries.Add((key.ToArray(), offset, value.Length));
     }
 
     /// <summary>
@@ -48,226 +38,512 @@ public sealed class RsstBuilder
     /// </summary>
     public Span<byte> AddEntry(ReadOnlySpan<byte> key, int valueLength)
     {
-        int offset = (int)_dataStream.Position;
-        _entryOffsets.Add(offset);
-
-        TrackLeafBoundary(key);
-
-        // Write key
-        Span<byte> leb = stackalloc byte[5];
-        int lebLen = Leb128.Write(leb, 0, key.Length);
-        _dataStream.Write(leb[..lebLen]);
-        _dataStream.Write(key);
-
-        // Write value length
-        lebLen = Leb128.Write(leb, 0, valueLength);
-        _dataStream.Write(leb[..lebLen]);
-
-        // Reserve space for value and return span into it
-        long valueStart = _dataStream.Position;
-        _dataStream.SetLength(_dataStream.Length + valueLength);
-        _dataStream.Position = valueStart + valueLength;
-
-        return _dataStream.GetBuffer().AsSpan((int)valueStart, valueLength);
-    }
-
-    /// <summary>
-    /// Convenience wrapper: add a key-value pair. Key must be in sorted order.
-    /// </summary>
-    public void Add(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value)
-    {
-        Span<byte> dest = AddEntry(key, value.Length);
-        value.CopyTo(dest);
-    }
-
-    /// <summary>
-    /// Begin a large entry where the exact value size is not known upfront.
-    /// Returns a span of <paramref name="maxValueLength"/> bytes for the caller to write into.
-    /// Call <see cref="FinishEntry"/> with the actual size after writing.
-    /// The value LEB128 is padded so FinishEntry can rewrite it in-place without shifting data.
-    /// </summary>
-    public Span<byte> BeginLargeEntry(ReadOnlySpan<byte> key, int maxValueLength)
-    {
-        int offset = (int)_dataStream.Position;
-        _entryOffsets.Add(offset);
-
-        TrackLeafBoundary(key);
-
-        // Write key
-        Span<byte> leb = stackalloc byte[5];
-        int lebLen = Leb128.Write(leb, 0, key.Length);
-        _dataStream.Write(leb[..lebLen]);
-        _dataStream.Write(key);
-
-        // Write value LEB128 padded to max size so FinishEntry can rewrite in-place
-        _pendingLebLength = Leb128.EncodedSize(maxValueLength);
-        _pendingValueLebPosition = (int)_dataStream.Position;
-        Span<byte> paddedLeb = stackalloc byte[5];
-        Leb128.WritePadded(paddedLeb, 0, maxValueLength, _pendingLebLength);
-        _dataStream.Write(paddedLeb[.._pendingLebLength]);
-
-        // Reserve space for value and return span
-        _pendingValueStart = (int)_dataStream.Position;
-        _dataStream.SetLength(Math.Max(_dataStream.Length, _pendingValueStart + maxValueLength));
-        _dataStream.Position = _pendingValueStart + maxValueLength;
-
-        return _dataStream.GetBuffer().AsSpan(_pendingValueStart, maxValueLength);
-    }
-
-    /// <summary>
-    /// Finish a large entry started with <see cref="BeginLargeEntry"/>.
-    /// Rewrites the value LEB128 with the actual size (padded to same byte count).
-    /// </summary>
-    public void FinishEntry(int actualSize)
-    {
-        // Rewrite LEB128 in-place with actual size, padded to same byte count
-        Leb128.WritePadded(_dataStream.GetBuffer().AsSpan(), _pendingValueLebPosition, actualSize, _pendingLebLength);
-
-        // Adjust stream position to end of actual data
-        _dataStream.Position = _pendingValueStart + actualSize;
-        _pendingValueLebPosition = -1;
+        long offset = _valueStream.Position;
+        _valueStream.SetLength(Math.Max(_valueStream.Length, offset + valueLength));
+        _valueStream.Position = offset + valueLength;
+        _entries.Add((key.ToArray(), offset, valueLength));
+        return _valueStream.GetBuffer().AsSpan((int)offset, valueLength);
     }
 
     public byte[] Build()
     {
-        if (_entryOffsets.Count == 0) return BuildEmpty();
+        if (_entries.Count == 0) return BuildEmpty();
 
-        // Close last leaf if partial
-        if (_leafEntryCount > 0)
+        // Step 1: Compute separators for all entries
+        byte[][] separators = ComputeAllSeparators();
+
+        // Step 2: Write data region - for each entry:
+        //   [Value][ValueLength LEB128][KeyLength LEB128][RemainingKey]
+        MemoryStream dataStream = new();
+        int[] valueLengthOffsets = new int[_entries.Count];
+        byte[] valueBuffer = _valueStream.GetBuffer();
+
+        Span<byte> leb = stackalloc byte[10];
+        for (int i = 0; i < _entries.Count; i++)
         {
-            _lastKeys.Add(_lastKey!);
+            (byte[] key, long valueOffset, int valueLength) = _entries[i];
+            byte[] separator = separators[i];
+            int remainingKeyLength = key.Length - separator.Length;
+
+            // Value
+            dataStream.Write(valueBuffer, (int)valueOffset, valueLength);
+
+            // Record ValueLengthOffset (this is what the index stores)
+            valueLengthOffsets[i] = (int)dataStream.Position;
+
+            // ValueLength (LEB128)
+            int lebLen = Leb128.Write(leb, 0, valueLength);
+            dataStream.Write(leb[..lebLen]);
+
+            // KeyLength (LEB128) = remaining key length
+            lebLen = Leb128.Write(leb, 0, remainingKeyLength);
+            dataStream.Write(leb[..lebLen]);
+
+            // RemainingKey
+            if (remainingKeyLength > 0)
+                dataStream.Write(key, separator.Length, remainingKeyLength);
         }
 
-        int dataSize = (int)_dataStream.Position;
-        byte[] dataBytes = _dataStream.GetBuffer();
+        int dataRegionSize = (int)dataStream.Position;
 
-        // Phase 2: Build B-tree index
+        // Step 3: Build leaf nodes bottom-up
         List<byte[]> nodeBytes = new();
         List<int> currentLevelOffsets = new();
-        List<byte[]> currentLevelFirstKeys = new();
-        List<byte[]> currentLevelLastKeys = new();
+        List<byte[]> currentLevelFirstSeps = new();
+        List<byte[]> currentLevelLastSeps = new();
 
-        // Build leaf nodes
         int entryIdx = 0;
-        int leafIdx = 0;
-        while (entryIdx < _entryOffsets.Count)
+        int indexOffset = 0;
+        while (entryIdx < _entries.Count)
         {
-            int count = Math.Min(Rsst.MaxLeafEntries, _entryOffsets.Count - entryIdx);
+            int count = Math.Min(Rsst.MaxLeafEntries, _entries.Count - entryIdx);
 
-            int leafSize = 1 + Leb128.EncodedSize(count) + count * 4;
-            byte[] leaf = new byte[leafSize];
-            int pos = 0;
-            leaf[pos++] = Rsst.LeafNodeType;
-            pos = Leb128.Write(leaf, pos, count);
+            List<(byte[] Separator, int ValueLengthOffset)> leafEntries = new(count);
             for (int i = 0; i < count; i++)
             {
-                BinaryPrimitives.WriteInt32LittleEndian(leaf.AsSpan(pos), _entryOffsets[entryIdx + i]);
-                pos += 4;
+                leafEntries.Add((separators[entryIdx + i], valueLengthOffsets[entryIdx + i]));
             }
 
-            currentLevelOffsets.Add(dataSize);
-            currentLevelFirstKeys.Add(_firstKeys[leafIdx]);
-            currentLevelLastKeys.Add(_lastKeys[leafIdx]);
-            dataSize += leaf.Length;
+            byte[] leaf = BuildLeafNode(leafEntries);
+            currentLevelOffsets.Add(indexOffset);
+            currentLevelFirstSeps.Add(separators[entryIdx]);
+            currentLevelLastSeps.Add(separators[entryIdx + count - 1]);
+            indexOffset += leaf.Length;
             nodeBytes.Add(leaf);
 
             entryIdx += count;
-            leafIdx++;
         }
 
-        // Build internal nodes bottom-up until we have a single root
+        // Step 4: Build internal nodes bottom-up until we have a single root
         while (currentLevelOffsets.Count > 1)
         {
             List<int> nextLevelOffsets = new();
-            List<byte[]> nextLevelFirstKeys = new();
-            List<byte[]> nextLevelLastKeys = new();
+            List<byte[]> nextLevelFirstSeps = new();
+            List<byte[]> nextLevelLastSeps = new();
 
             int childIdx = 0;
             while (childIdx < currentLevelOffsets.Count)
             {
                 int childCount = Math.Min(Rsst.MaxLeafEntries, currentLevelOffsets.Count - childIdx);
-                byte[] internalFirstKey = currentLevelFirstKeys[childIdx];
-                byte[] internalLastKey = currentLevelLastKeys[childIdx + childCount - 1];
 
-                int nodeSize = 1 + Leb128.EncodedSize(childCount) + 4;
+                List<(byte[] Separator, int ChildOffset)> internalEntries = new(childCount);
+                internalEntries.Add(([], currentLevelOffsets[childIdx]));
+
                 for (int i = 1; i < childCount; i++)
                 {
-                    byte[] sepKey = ComputeSeparatorKey(currentLevelLastKeys[childIdx + i - 1], currentLevelFirstKeys[childIdx + i]);
-                    nodeSize += Leb128.EncodedSize(sepKey.Length) + sepKey.Length + 4;
+                    byte[] sep = ComputeSeparatorKey(
+                        currentLevelLastSeps[childIdx + i - 1],
+                        currentLevelFirstSeps[childIdx + i]);
+                    internalEntries.Add((sep, currentLevelOffsets[childIdx + i]));
                 }
 
-                byte[] node = new byte[nodeSize];
-                int pos = 0;
-                node[pos++] = Rsst.InternalNodeType;
-                pos = Leb128.Write(node, pos, childCount);
-
-                // First child offset
-                BinaryPrimitives.WriteInt32LittleEndian(node.AsSpan(pos), currentLevelOffsets[childIdx]);
-                pos += 4;
-
-                // Subsequent children with separator keys
-                for (int i = 1; i < childCount; i++)
-                {
-                    byte[] sepKey = ComputeSeparatorKey(currentLevelLastKeys[childIdx + i - 1], currentLevelFirstKeys[childIdx + i]);
-                    pos = Leb128.Write(node, pos, sepKey.Length);
-                    sepKey.CopyTo(node.AsSpan(pos));
-                    pos += sepKey.Length;
-                    BinaryPrimitives.WriteInt32LittleEndian(node.AsSpan(pos), currentLevelOffsets[childIdx + i]);
-                    pos += 4;
-                }
-
-                nextLevelOffsets.Add(dataSize);
-                nextLevelFirstKeys.Add(internalFirstKey);
-                nextLevelLastKeys.Add(internalLastKey);
-                dataSize += node.Length;
+                byte[] node = BuildInternalNode(internalEntries);
+                nextLevelOffsets.Add(indexOffset);
+                nextLevelFirstSeps.Add(currentLevelFirstSeps[childIdx]);
+                nextLevelLastSeps.Add(currentLevelLastSeps[childIdx + childCount - 1]);
+                indexOffset += node.Length;
                 nodeBytes.Add(node);
 
                 childIdx += childCount;
             }
 
             currentLevelOffsets = nextLevelOffsets;
-            currentLevelFirstKeys = nextLevelFirstKeys;
-            currentLevelLastKeys = nextLevelLastKeys;
+            currentLevelFirstSeps = nextLevelFirstSeps;
+            currentLevelLastSeps = nextLevelLastSeps;
         }
 
-        int rootOffset = currentLevelOffsets[0];
+        int indexSize = indexOffset;
 
-        // Phase 3: Assemble final output
-        int totalSize = dataSize + Rsst.FooterSize;
+        // Step 5: Write trailer: [IndexSize LEB128][LEB128ByteCount: 1 byte]
+        Span<byte> trailerLeb = stackalloc byte[5];
+        int trailerLebLen = Leb128.Write(trailerLeb, 0, indexSize);
+        int trailerSize = trailerLebLen + 1; // LEB128 bytes + 1 byte for the count
+
+        int totalSize = dataRegionSize + indexSize + trailerSize;
         byte[] result = new byte[totalSize];
 
         // Copy data region
-        _dataStream.GetBuffer().AsSpan(0, (int)_dataStream.Position).CopyTo(result);
-        int writePos = (int)_dataStream.Position;
+        dataStream.GetBuffer().AsSpan(0, dataRegionSize).CopyTo(result);
 
-        // Write nodes
+        // Copy index nodes
+        int writePos = dataRegionSize;
         foreach (byte[] node in nodeBytes)
         {
             node.CopyTo(result.AsSpan(writePos));
             writePos += node.Length;
         }
 
-        // Write footer
-        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(writePos), rootOffset);
-        writePos += 4;
-        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(writePos), _entryOffsets.Count);
+        // IndexSize LEB128
+        trailerLeb[..trailerLebLen].CopyTo(result.AsSpan(writePos));
+        writePos += trailerLebLen;
+
+        // LEB128ByteCount (1 byte)
+        result[writePos] = (byte)trailerLebLen;
 
         return result;
     }
 
     private static byte[] BuildEmpty()
     {
-        byte[] result = new byte[Rsst.FooterSize];
-        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(0), 0);
-        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(4), 0);
-        return result;
+        // Empty RSST: [IndexSize=0 LEB128][LEB128ByteCount=1]
+        return [0x00, 0x01];
     }
 
     /// <summary>
-    /// Compute the shortest distinguishing prefix that separates left from right.
-    /// The result satisfies: left &lt; separator &lt;= right.
-    /// The search uses: key &lt; separator → go left, key >= separator → go right.
+    /// Build a leaf node, picking the smallest format (Variable/Uniform/UniformCompact).
+    /// Leaf entries store (Separator, ValueLengthOffset).
     /// </summary>
+    private static byte[] BuildLeafNode(List<(byte[] Separator, int ValueLengthOffset)> entries)
+    {
+        int count = entries.Count;
+        bool uniform = true;
+        int sepLen = entries[0].Separator.Length;
+        int minOffset = entries[0].ValueLengthOffset;
+        int maxOffset = entries[0].ValueLengthOffset;
+
+        for (int i = 0; i < count; i++)
+        {
+            if (entries[i].Separator.Length != sepLen)
+                uniform = false;
+            if (entries[i].ValueLengthOffset < minOffset) minOffset = entries[i].ValueLengthOffset;
+            if (entries[i].ValueLengthOffset > maxOffset) maxOffset = entries[i].ValueLengthOffset;
+        }
+
+        int range = maxOffset - minOffset;
+
+        int variableSize = ComputeVariableLeafSize(entries);
+        int bestFormat = 0;
+        int bestSize = variableSize;
+
+        if (uniform)
+        {
+            int baseOffsetLebSize = Leb128.EncodedSize(minOffset);
+
+            // Format 2: UniformCompact uint16
+            if (range <= 0xFFFF)
+            {
+                int compactSize = 6 + baseOffsetLebSize + count * (sepLen + 2);
+                if (compactSize < bestSize)
+                {
+                    bestFormat = 2;
+                    bestSize = compactSize;
+                }
+            }
+
+            // Format 1: Uniform uint24
+            if (range <= 0xFFFFFF)
+            {
+                int uniformSize = 6 + baseOffsetLebSize + count * (sepLen + 3);
+                if (uniformSize < bestSize)
+                {
+                    bestFormat = 1;
+                    bestSize = uniformSize;
+                }
+            }
+        }
+
+        return bestFormat switch
+        {
+            0 => WriteVariableLeafNode(entries, (byte)sepLen),
+            1 => WriteUniformLeafNode(entries, (byte)sepLen, minOffset, useUint24: true),
+            2 => WriteUniformLeafNode(entries, (byte)sepLen, minOffset, useUint24: false),
+            _ => throw new InvalidOperationException()
+        };
+    }
+
+    private static int ComputeVariableLeafSize(List<(byte[] Separator, int ValueLengthOffset)> entries)
+    {
+        int size = 6; // header only (no BaseOffset for variable format)
+        size += entries.Count * 2; // offset table
+        for (int i = 0; i < entries.Count; i++)
+        {
+            size += Leb128.EncodedSize(entries[i].Separator.Length)
+                    + entries[i].Separator.Length
+                    + Leb128.EncodedSize(entries[i].ValueLengthOffset);
+        }
+        return size;
+    }
+
+    private static byte[] WriteVariableLeafNode(List<(byte[] Separator, int ValueLengthOffset)> entries, byte sepLen)
+    {
+        int count = entries.Count;
+        int headerSize = 6;
+        int offsetTableSize = count * 2;
+
+        int dataSize = 0;
+        for (int i = 0; i < count; i++)
+        {
+            dataSize += Leb128.EncodedSize(entries[i].Separator.Length)
+                        + entries[i].Separator.Length
+                        + Leb128.EncodedSize(entries[i].ValueLengthOffset);
+        }
+
+        int totalSize = headerSize + offsetTableSize + dataSize;
+        byte[] node = new byte[totalSize];
+
+        // Write 6-byte header
+        BinaryPrimitives.WriteUInt16LittleEndian(node, (ushort)totalSize);
+        node[2] = 0x01; // IsLeaf=1, Format=0
+        BinaryPrimitives.WriteUInt16LittleEndian(node.AsSpan(3), (ushort)count);
+        node[5] = sepLen;
+
+        // Write offset table and entries: [SepLen LEB128][Separator][ValueLengthOffset LEB128]
+        int entryDataStart = headerSize + offsetTableSize;
+        int entryPos = entryDataStart;
+        for (int i = 0; i < count; i++)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(node.AsSpan(headerSize + i * 2), (ushort)(entryPos - entryDataStart));
+            entryPos = Leb128.Write(node, entryPos, entries[i].Separator.Length);
+            entries[i].Separator.CopyTo(node.AsSpan(entryPos));
+            entryPos += entries[i].Separator.Length;
+            entryPos = Leb128.Write(node, entryPos, entries[i].ValueLengthOffset);
+        }
+
+        return node;
+    }
+
+    private static byte[] WriteUniformLeafNode(List<(byte[] Separator, int ValueLengthOffset)> entries, byte sepLen, int baseOffset, bool useUint24)
+    {
+        int count = entries.Count;
+        int baseOffsetLebSize = Leb128.EncodedSize(baseOffset);
+        int offsetBytes = useUint24 ? 3 : 2;
+        int stride = sepLen + offsetBytes;
+        int totalSize = 6 + baseOffsetLebSize + count * stride;
+        byte[] node = new byte[totalSize];
+
+        // Write header
+        BinaryPrimitives.WriteUInt16LittleEndian(node, (ushort)totalSize);
+        byte format = useUint24 ? (byte)1 : (byte)2;
+        node[2] = (byte)(0x01 | (format << 1)); // IsLeaf=1, Format
+        BinaryPrimitives.WriteUInt16LittleEndian(node.AsSpan(3), (ushort)count);
+        node[5] = sepLen;
+
+        // Write BaseOffset
+        int pos = Leb128.Write(node, 6, baseOffset);
+
+        // Write entries: [Separator][RelativeValueLengthOffset]
+        for (int i = 0; i < count; i++)
+        {
+            entries[i].Separator.CopyTo(node.AsSpan(pos));
+            pos += sepLen;
+
+            int relative = entries[i].ValueLengthOffset - baseOffset;
+            if (useUint24)
+            {
+                node[pos] = (byte)(relative & 0xFF);
+                node[pos + 1] = (byte)((relative >> 8) & 0xFF);
+                node[pos + 2] = (byte)((relative >> 16) & 0xFF);
+                pos += 3;
+            }
+            else
+            {
+                BinaryPrimitives.WriteUInt16LittleEndian(node.AsSpan(pos), (ushort)relative);
+                pos += 2;
+            }
+        }
+
+        return node;
+    }
+
+    /// <summary>
+    /// Build an internal node. Entry 0 has empty separator (first child).
+    /// </summary>
+    private static byte[] BuildInternalNode(List<(byte[] Separator, int ChildOffset)> entries)
+    {
+        int count = entries.Count;
+        bool uniform = true;
+        int sepLen = entries.Count > 1 ? entries[1].Separator.Length : 0;
+        int minOffset = entries[0].ChildOffset;
+        int maxOffset = entries[0].ChildOffset;
+
+        for (int i = 1; i < count; i++)
+        {
+            if (entries[i].Separator.Length != sepLen) uniform = false;
+            if (entries[i].ChildOffset < minOffset) minOffset = entries[i].ChildOffset;
+            if (entries[i].ChildOffset > maxOffset) maxOffset = entries[i].ChildOffset;
+        }
+        if (entries[0].ChildOffset < minOffset) minOffset = entries[0].ChildOffset;
+        if (entries[0].ChildOffset > maxOffset) maxOffset = entries[0].ChildOffset;
+
+        int range = maxOffset - minOffset;
+
+        // Variable format size
+        int variableSize = 6 + count * 2;
+        variableSize += Leb128.EncodedSize(entries[0].ChildOffset);
+        for (int i = 1; i < count; i++)
+        {
+            variableSize += Leb128.EncodedSize(entries[i].Separator.Length) + entries[i].Separator.Length + Leb128.EncodedSize(entries[i].ChildOffset);
+        }
+
+        int bestFormat = 0;
+        int bestSize = variableSize;
+        int bestBaseOffset = 0;
+
+        if (uniform && count > 1)
+        {
+            int baseOffsetLebSize = Leb128.EncodedSize(minOffset);
+
+            if (range <= 0xFFFF)
+            {
+                int compactSize = 6 + baseOffsetLebSize + count * (sepLen + 2);
+                if (compactSize < bestSize)
+                {
+                    bestFormat = 2;
+                    bestSize = compactSize;
+                    bestBaseOffset = minOffset;
+                }
+            }
+
+            if (range <= 0xFFFFFF)
+            {
+                int uniformSize = 6 + baseOffsetLebSize + count * (sepLen + 3);
+                if (uniformSize < bestSize)
+                {
+                    bestFormat = 1;
+                    bestSize = uniformSize;
+                    bestBaseOffset = minOffset;
+                }
+            }
+        }
+
+        return bestFormat switch
+        {
+            0 => WriteVariableInternalNode(entries, (byte)sepLen),
+            1 => WriteUniformInternalNode(entries, (byte)sepLen, bestBaseOffset, useUint24: true),
+            2 => WriteUniformInternalNode(entries, (byte)sepLen, bestBaseOffset, useUint24: false),
+            _ => throw new InvalidOperationException()
+        };
+    }
+
+    private static byte[] WriteVariableInternalNode(List<(byte[] Separator, int ChildOffset)> entries, byte sepLen)
+    {
+        int count = entries.Count;
+        int headerSize = 6;
+        int offsetTableSize = count * 2;
+
+        int dataSize = Leb128.EncodedSize(entries[0].ChildOffset);
+        for (int i = 1; i < count; i++)
+        {
+            dataSize += Leb128.EncodedSize(entries[i].Separator.Length) + entries[i].Separator.Length + Leb128.EncodedSize(entries[i].ChildOffset);
+        }
+
+        int totalSize = headerSize + offsetTableSize + dataSize;
+        byte[] node = new byte[totalSize];
+
+        BinaryPrimitives.WriteUInt16LittleEndian(node, (ushort)totalSize);
+        node[2] = 0x00; // IsLeaf=0, Format=0
+        BinaryPrimitives.WriteUInt16LittleEndian(node.AsSpan(3), (ushort)count);
+        node[5] = sepLen;
+
+        int entryDataStart = headerSize + offsetTableSize;
+        int entryPos = entryDataStart;
+
+        BinaryPrimitives.WriteUInt16LittleEndian(node.AsSpan(headerSize), (ushort)(entryPos - entryDataStart));
+        entryPos = Leb128.Write(node, entryPos, entries[0].ChildOffset);
+
+        for (int i = 1; i < count; i++)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(node.AsSpan(headerSize + i * 2), (ushort)(entryPos - entryDataStart));
+            entryPos = Leb128.Write(node, entryPos, entries[i].Separator.Length);
+            entries[i].Separator.CopyTo(node.AsSpan(entryPos));
+            entryPos += entries[i].Separator.Length;
+            entryPos = Leb128.Write(node, entryPos, entries[i].ChildOffset);
+        }
+
+        return node;
+    }
+
+    private static byte[] WriteUniformInternalNode(List<(byte[] Separator, int ChildOffset)> entries, byte sepLen, int baseOffset, bool useUint24)
+    {
+        int count = entries.Count;
+        int baseOffsetLebSize = Leb128.EncodedSize(baseOffset);
+        int offsetBytes = useUint24 ? 3 : 2;
+        int stride = sepLen + offsetBytes;
+        int totalSize = 6 + baseOffsetLebSize + count * stride;
+        byte[] node = new byte[totalSize];
+
+        BinaryPrimitives.WriteUInt16LittleEndian(node, (ushort)totalSize);
+        byte format = useUint24 ? (byte)1 : (byte)2;
+        node[2] = (byte)(format << 1); // IsLeaf=0, Format
+        BinaryPrimitives.WriteUInt16LittleEndian(node.AsSpan(3), (ushort)count);
+        node[5] = sepLen;
+
+        int pos = Leb128.Write(node, 6, baseOffset);
+
+        for (int i = 0; i < count; i++)
+        {
+            if (i == 0)
+                pos += sepLen; // zero-filled padding
+            else
+            {
+                entries[i].Separator.CopyTo(node.AsSpan(pos));
+                pos += sepLen;
+            }
+
+            int relative = entries[i].ChildOffset - baseOffset;
+            if (useUint24)
+            {
+                node[pos] = (byte)(relative & 0xFF);
+                node[pos + 1] = (byte)((relative >> 8) & 0xFF);
+                node[pos + 2] = (byte)((relative >> 16) & 0xFF);
+                pos += 3;
+            }
+            else
+            {
+                BinaryPrimitives.WriteUInt16LittleEndian(node.AsSpan(pos), (ushort)relative);
+                pos += 2;
+            }
+        }
+
+        return node;
+    }
+
+    private byte[][] ComputeAllSeparators()
+    {
+        byte[][] separators = new byte[_entries.Count][];
+        for (int i = 0; i < _entries.Count; i++)
+        {
+            byte[]? prevKey = i > 0 ? _entries[i - 1].Key : null;
+            byte[] currKey = _entries[i].Key;
+            byte[]? nextKey = i < _entries.Count - 1 ? _entries[i + 1].Key : null;
+            separators[i] = ComputeSeparator(prevKey, currKey, nextKey);
+        }
+        return separators;
+    }
+
+    private static byte[] ComputeSeparator(byte[]? prevKey, byte[] currKey, byte[]? nextKey)
+    {
+        int minVsPrev = 0;
+        if (prevKey is not null)
+        {
+            int common = CommonPrefixLength(prevKey, currKey);
+            minVsPrev = common + 1;
+        }
+
+        int minVsNext = 0;
+        if (nextKey is not null)
+        {
+            int common = CommonPrefixLength(currKey, nextKey);
+            minVsNext = common + 1;
+        }
+
+        int len = Math.Max(minVsPrev, minVsNext);
+        len = Math.Min(len, currKey.Length);
+        if (len == 0) len = Math.Min(1, currKey.Length);
+
+        return currKey[..len];
+    }
+
+    private static int CommonPrefixLength(byte[] a, byte[] b)
+    {
+        int minLen = Math.Min(a.Length, b.Length);
+        for (int i = 0; i < minLen; i++)
+        {
+            if (a[i] != b[i]) return i;
+        }
+        return minLen;
+    }
+
     internal static byte[] ComputeSeparatorKey(byte[] left, byte[] right)
     {
         int minLen = Math.Min(left.Length, right.Length);
@@ -275,25 +551,15 @@ public sealed class RsstBuilder
         for (int i = 0; i < minLen; i++)
         {
             if (left[i] != right[i])
-            {
                 return right[..(i + 1)];
-            }
         }
 
         if (right.Length > minLen)
-        {
             return right[..(minLen + 1)];
-        }
 
-        // They are equal (shouldn't happen with unique sorted keys), just return right
         return right.ToArray();
     }
 
-    /// <summary>
-    /// Merge two sorted RSST snapshots into one using streaming merge-sort.
-    /// Newer entries override older ones when keys match.
-    /// Both source RSSTs must be sorted (which they always are).
-    /// </summary>
     public static byte[] StreamingMerge(ReadOnlySpan<byte> olderData, ReadOnlySpan<byte> newerData)
     {
         Rsst older = new(olderData);
@@ -301,97 +567,50 @@ public sealed class RsstBuilder
 
         if (older.EntryCount == 0 && newer.EntryCount == 0) return BuildEmpty();
 
-        // Collect offsets from both for merge iteration
-        int[] olderOffsets = CollectEntryOffsets(olderData, older);
-        int[] newerOffsets = CollectEntryOffsets(newerData, newer);
-
         RsstBuilder builder = new();
-        int oi = 0, ni = 0;
 
-        while (oi < olderOffsets.Length && ni < newerOffsets.Length)
+        using Rsst.Enumerator olderEnum = older.GetEnumerator();
+        using Rsst.Enumerator newerEnum = newer.GetEnumerator();
+
+        bool hasOlder = olderEnum.MoveNext();
+        bool hasNewer = newerEnum.MoveNext();
+
+        while (hasOlder && hasNewer)
         {
-            Rsst.ReadEntry(olderData, olderOffsets[oi], out ReadOnlySpan<byte> olderKey, out ReadOnlySpan<byte> olderValue);
-            Rsst.ReadEntry(newerData, newerOffsets[ni], out ReadOnlySpan<byte> newerKey, out ReadOnlySpan<byte> newerValue);
+            ReadOnlySpan<byte> olderKey = olderEnum.Current.Key;
+            ReadOnlySpan<byte> newerKey = newerEnum.Current.Key;
 
             int cmp = olderKey.SequenceCompareTo(newerKey);
             if (cmp < 0)
             {
-                builder.Add(olderKey, olderValue);
-                oi++;
+                builder.Add(olderKey, olderEnum.Current.Value);
+                hasOlder = olderEnum.MoveNext();
             }
             else if (cmp > 0)
             {
-                builder.Add(newerKey, newerValue);
-                ni++;
+                builder.Add(newerKey, newerEnum.Current.Value);
+                hasNewer = newerEnum.MoveNext();
             }
             else
             {
-                // Same key - newer wins
-                builder.Add(newerKey, newerValue);
-                oi++;
-                ni++;
+                builder.Add(newerKey, newerEnum.Current.Value);
+                hasOlder = olderEnum.MoveNext();
+                hasNewer = newerEnum.MoveNext();
             }
         }
 
-        // Drain remaining
-        while (oi < olderOffsets.Length)
+        while (hasOlder)
         {
-            Rsst.ReadEntry(olderData, olderOffsets[oi], out ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value);
-            builder.Add(key, value);
-            oi++;
+            builder.Add(olderEnum.Current.Key, olderEnum.Current.Value);
+            hasOlder = olderEnum.MoveNext();
         }
 
-        while (ni < newerOffsets.Length)
+        while (hasNewer)
         {
-            Rsst.ReadEntry(newerData, newerOffsets[ni], out ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value);
-            builder.Add(key, value);
-            ni++;
+            builder.Add(newerEnum.Current.Key, newerEnum.Current.Value);
+            hasNewer = newerEnum.MoveNext();
         }
 
         return builder.Build();
-    }
-
-    private static int[] CollectEntryOffsets(ReadOnlySpan<byte> data, Rsst rsst)
-    {
-        if (rsst.EntryCount == 0) return [];
-
-        int[] offsets = new int[rsst.EntryCount];
-        int idx = 0;
-        int rootOffset = BinaryPrimitives.ReadInt32LittleEndian(data[^Rsst.FooterSize..]);
-        CollectOffsetsFromNode(data, rootOffset, offsets, ref idx);
-        return offsets;
-    }
-
-    private static void CollectOffsetsFromNode(ReadOnlySpan<byte> data, int nodeOffset, int[] offsets, ref int idx)
-    {
-        byte nodeType = data[nodeOffset];
-        int pos = nodeOffset + 1;
-
-        if (nodeType == Rsst.LeafNodeType)
-        {
-            int numEntries = Leb128.Read(data, ref pos);
-            for (int i = 0; i < numEntries; i++)
-            {
-                offsets[idx++] = BinaryPrimitives.ReadInt32LittleEndian(data[pos..]);
-                pos += 4;
-            }
-        }
-        else
-        {
-            int numChildren = Leb128.Read(data, ref pos);
-            int firstChild = BinaryPrimitives.ReadInt32LittleEndian(data[pos..]);
-            pos += 4;
-
-            CollectOffsetsFromNode(data, firstChild, offsets, ref idx);
-
-            for (int i = 1; i < numChildren; i++)
-            {
-                int sepKeyLen = Leb128.Read(data, ref pos);
-                pos += sepKeyLen;
-                int childOffset = BinaryPrimitives.ReadInt32LittleEndian(data[pos..]);
-                pos += 4;
-                CollectOffsetsFromNode(data, childOffset, offsets, ref idx);
-            }
-        }
     }
 }
