@@ -200,23 +200,30 @@ public class RsstTests
     [Test]
     public void Binary_Keys_RoundTrip()
     {
-        RsstBuilder builder = new();
-        byte[][] keys = new byte[100][];
+        // Generate random keys and sort them (RsstBuilder requires sorted input)
+        (byte[] Key, int Index)[] entries = new (byte[], int)[100];
         for (int i = 0; i < 100; i++)
         {
-            keys[i] = new byte[32];
-            Random.Shared.NextBytes(keys[i]);
-            builder.Add(keys[i], BitConverter.GetBytes(i));
+            entries[i].Key = new byte[32];
+            Random.Shared.NextBytes(entries[i].Key);
+            entries[i].Index = i;
+        }
+        Array.Sort(entries, (a, b) => a.Key.AsSpan().SequenceCompareTo(b.Key));
+
+        RsstBuilder builder = new();
+        foreach ((byte[] key, int index) in entries)
+        {
+            builder.Add(key, BitConverter.GetBytes(index));
         }
 
         byte[] data = builder.Build();
         Rsst.Rsst rsst = new(data);
         Assert.That(rsst.EntryCount, Is.EqualTo(100));
 
-        for (int i = 0; i < 100; i++)
+        foreach ((byte[] key, int index) in entries)
         {
-            Assert.That(rsst.TryGet(keys[i], out ReadOnlySpan<byte> val), Is.True);
-            Assert.That(BitConverter.ToInt32(val), Is.EqualTo(i));
+            Assert.That(rsst.TryGet(key, out ReadOnlySpan<byte> val), Is.True);
+            Assert.That(BitConverter.ToInt32(val), Is.EqualTo(index));
         }
     }
 

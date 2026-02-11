@@ -96,6 +96,24 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         return rsst.TryGet(key, out _);
     }
 
+    /// <summary>
+    /// Get the self-destruct flag with boolean distinction.
+    /// Returns null if no self-destruct entry exists for this address.
+    /// Returns true if this is a new account (value = 0x01), false if destructed (value = empty).
+    /// </summary>
+    public bool? TryGetSelfDestructFlag(Address address)
+    {
+        Span<byte> key = stackalloc byte[1 + Address.Size];
+        key[0] = SelfDestructTag;
+        address.Bytes.CopyTo(key[1..]);
+
+        if (!BloomCheck(key)) return null;
+
+        Rsst.Rsst rsst = new(_data.Span);
+        if (!rsst.TryGet(key, out ReadOnlySpan<byte> value)) return null;
+        return value.Length > 0 && value[0] == 0x01;
+    }
+
     public byte[]? TryLoadStateNodeRlp(in TreePath path)
     {
         Span<byte> key = stackalloc byte[1 + 32 + 1];

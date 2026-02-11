@@ -7,35 +7,87 @@ namespace Nethermind.State.Flat.Rsst;
 
 /// <summary>
 /// Builds an RSST (Read-only Sorted String Table) from key-value entries.
-/// Entries must be added in sorted key order or will be sorted internally.
+/// Entries MUST be added in sorted key order. No internal sorting is performed.
+/// Writes entries directly to a growable buffer to avoid buffering all entries in memory.
 /// </summary>
 public sealed class RsstBuilder
 {
-    private readonly List<(byte[] Key, byte[] Value)> _entries = new();
+    private readonly MemoryStream _dataStream = new();
+    private readonly List<int> _entryOffsets = new();
+    private readonly List<byte[]> _firstKeys = new(); // first key per leaf
+    private readonly List<byte[]> _lastKeys = new();  // last key per leaf
 
+    private byte[]? _lastKey;
+    private int _leafEntryCount;
+
+    public int EntryCount => _entryOffsets.Count;
+
+    /// <summary>
+    /// Add an entry with pre-allocated value space. Returns a span where the caller writes the value directly.
+    /// Key must be greater than the previously added key (sorted order required).
+    /// </summary>
+    public Span<byte> AddEntry(ReadOnlySpan<byte> key, int valueLength)
+    {
+        int offset = (int)_dataStream.Position;
+        _entryOffsets.Add(offset);
+
+        // Track leaf boundaries
+        if (_leafEntryCount == 0)
+        {
+            _firstKeys.Add(key.ToArray());
+        }
+        _leafEntryCount++;
+
+        byte[] currentKey = key.ToArray();
+        if (_leafEntryCount >= Rsst.MaxLeafEntries)
+        {
+            _lastKeys.Add(currentKey);
+            _leafEntryCount = 0;
+        }
+
+        _lastKey = currentKey;
+
+        // Write key
+        Span<byte> leb = stackalloc byte[5];
+        int lebLen = Leb128.Write(leb, 0, key.Length);
+        _dataStream.Write(leb[..lebLen]);
+        _dataStream.Write(key);
+
+        // Write value length
+        lebLen = Leb128.Write(leb, 0, valueLength);
+        _dataStream.Write(leb[..lebLen]);
+
+        // Reserve space for value and return span into it
+        long valueStart = _dataStream.Position;
+        _dataStream.SetLength(_dataStream.Length + valueLength);
+        _dataStream.Position = valueStart + valueLength;
+
+        return _dataStream.GetBuffer().AsSpan((int)valueStart, valueLength);
+    }
+
+    /// <summary>
+    /// Convenience wrapper: add a key-value pair. Key must be in sorted order.
+    /// </summary>
     public void Add(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value)
     {
-        _entries.Add((key.ToArray(), value.ToArray()));
+        Span<byte> dest = AddEntry(key, value.Length);
+        value.CopyTo(dest);
     }
 
     public byte[] Build()
     {
-        if (_entries.Count == 0) return BuildEmpty();
+        if (_entryOffsets.Count == 0) return BuildEmpty();
 
-        _entries.Sort((a, b) => a.Key.AsSpan().SequenceCompareTo(b.Key));
-
-        // Phase 1: Write entries to data region
-        int dataSize = 0;
-        int[] entryOffsets = new int[_entries.Count];
-        for (int i = 0; i < _entries.Count; i++)
+        // Close last leaf if partial
+        if (_leafEntryCount > 0)
         {
-            entryOffsets[i] = dataSize;
-            dataSize += Leb128.EncodedSize(_entries[i].Key.Length) + _entries[i].Key.Length
-                        + Leb128.EncodedSize(_entries[i].Value.Length) + _entries[i].Value.Length;
+            _lastKeys.Add(_lastKey!);
         }
 
+        int dataSize = (int)_dataStream.Position;
+        byte[] dataBytes = _dataStream.GetBuffer();
+
         // Phase 2: Build B-tree index
-        // Leaf nodes: groups of up to MaxLeafEntries entry offsets
         List<byte[]> nodeBytes = new();
         List<int> currentLevelOffsets = new();
         List<byte[]> currentLevelFirstKeys = new();
@@ -43,11 +95,10 @@ public sealed class RsstBuilder
 
         // Build leaf nodes
         int entryIdx = 0;
-        while (entryIdx < _entries.Count)
+        int leafIdx = 0;
+        while (entryIdx < _entryOffsets.Count)
         {
-            int count = Math.Min(Rsst.MaxLeafEntries, _entries.Count - entryIdx);
-            byte[] leafFirstKey = _entries[entryIdx].Key;
-            byte[] leafLastKey = _entries[entryIdx + count - 1].Key;
+            int count = Math.Min(Rsst.MaxLeafEntries, _entryOffsets.Count - entryIdx);
 
             int leafSize = 1 + Leb128.EncodedSize(count) + count * 4;
             byte[] leaf = new byte[leafSize];
@@ -56,17 +107,18 @@ public sealed class RsstBuilder
             pos = Leb128.Write(leaf, pos, count);
             for (int i = 0; i < count; i++)
             {
-                BinaryPrimitives.WriteInt32LittleEndian(leaf.AsSpan(pos), entryOffsets[entryIdx + i]);
+                BinaryPrimitives.WriteInt32LittleEndian(leaf.AsSpan(pos), _entryOffsets[entryIdx + i]);
                 pos += 4;
             }
 
             currentLevelOffsets.Add(dataSize);
-            currentLevelFirstKeys.Add(leafFirstKey);
-            currentLevelLastKeys.Add(leafLastKey);
+            currentLevelFirstKeys.Add(_firstKeys[leafIdx]);
+            currentLevelLastKeys.Add(_lastKeys[leafIdx]);
             dataSize += leaf.Length;
             nodeBytes.Add(leaf);
 
             entryIdx += count;
+            leafIdx++;
         }
 
         // Build internal nodes bottom-up until we have a single root
@@ -83,9 +135,6 @@ public sealed class RsstBuilder
                 byte[] internalFirstKey = currentLevelFirstKeys[childIdx];
                 byte[] internalLastKey = currentLevelLastKeys[childIdx + childCount - 1];
 
-                // Separator is between last key of left child and first key of right child
-                // Compute size: type(1) + numChildren(leb128) + first_child_offset(4)
-                // + for each subsequent child: sep_key_len(leb128) + sep_key + child_offset(4)
                 int nodeSize = 1 + Leb128.EncodedSize(childCount) + 4;
                 for (int i = 1; i < childCount; i++)
                 {
@@ -132,18 +181,10 @@ public sealed class RsstBuilder
         // Phase 3: Assemble final output
         int totalSize = dataSize + Rsst.FooterSize;
         byte[] result = new byte[totalSize];
-        int writePos = 0;
 
-        // Write entries
-        for (int i = 0; i < _entries.Count; i++)
-        {
-            writePos = Leb128.Write(result, writePos, _entries[i].Key.Length);
-            _entries[i].Key.CopyTo(result.AsSpan(writePos));
-            writePos += _entries[i].Key.Length;
-            writePos = Leb128.Write(result, writePos, _entries[i].Value.Length);
-            _entries[i].Value.CopyTo(result.AsSpan(writePos));
-            writePos += _entries[i].Value.Length;
-        }
+        // Copy data region
+        _dataStream.GetBuffer().AsSpan(0, (int)_dataStream.Position).CopyTo(result);
+        int writePos = (int)_dataStream.Position;
 
         // Write nodes
         foreach (byte[] node in nodeBytes)
@@ -155,7 +196,7 @@ public sealed class RsstBuilder
         // Write footer
         BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(writePos), rootOffset);
         writePos += 4;
-        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(writePos), _entries.Count);
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(writePos), _entryOffsets.Count);
 
         return result;
     }
@@ -181,14 +222,10 @@ public sealed class RsstBuilder
         {
             if (left[i] != right[i])
             {
-                // right[0..i+1] is a prefix of right that is > left (since right[i] > left[i])
-                // and <= right (since it's a prefix of right)
                 return right[..(i + 1)];
             }
         }
 
-        // One is a prefix of the other. Since left < right and they share minLen bytes,
-        // right must be longer. Use right up to minLen+1.
         if (right.Length > minLen)
         {
             return right[..(minLen + 1)];
@@ -196,5 +233,111 @@ public sealed class RsstBuilder
 
         // They are equal (shouldn't happen with unique sorted keys), just return right
         return right.ToArray();
+    }
+
+    /// <summary>
+    /// Merge two sorted RSST snapshots into one using streaming merge-sort.
+    /// Newer entries override older ones when keys match.
+    /// Both source RSSTs must be sorted (which they always are).
+    /// </summary>
+    public static byte[] StreamingMerge(ReadOnlySpan<byte> olderData, ReadOnlySpan<byte> newerData)
+    {
+        Rsst older = new(olderData);
+        Rsst newer = new(newerData);
+
+        if (older.EntryCount == 0 && newer.EntryCount == 0) return BuildEmpty();
+
+        // Collect offsets from both for merge iteration
+        int[] olderOffsets = CollectEntryOffsets(olderData, older);
+        int[] newerOffsets = CollectEntryOffsets(newerData, newer);
+
+        RsstBuilder builder = new();
+        int oi = 0, ni = 0;
+
+        while (oi < olderOffsets.Length && ni < newerOffsets.Length)
+        {
+            Rsst.ReadEntry(olderData, olderOffsets[oi], out ReadOnlySpan<byte> olderKey, out ReadOnlySpan<byte> olderValue);
+            Rsst.ReadEntry(newerData, newerOffsets[ni], out ReadOnlySpan<byte> newerKey, out ReadOnlySpan<byte> newerValue);
+
+            int cmp = olderKey.SequenceCompareTo(newerKey);
+            if (cmp < 0)
+            {
+                builder.Add(olderKey, olderValue);
+                oi++;
+            }
+            else if (cmp > 0)
+            {
+                builder.Add(newerKey, newerValue);
+                ni++;
+            }
+            else
+            {
+                // Same key - newer wins
+                builder.Add(newerKey, newerValue);
+                oi++;
+                ni++;
+            }
+        }
+
+        // Drain remaining
+        while (oi < olderOffsets.Length)
+        {
+            Rsst.ReadEntry(olderData, olderOffsets[oi], out ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value);
+            builder.Add(key, value);
+            oi++;
+        }
+
+        while (ni < newerOffsets.Length)
+        {
+            Rsst.ReadEntry(newerData, newerOffsets[ni], out ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value);
+            builder.Add(key, value);
+            ni++;
+        }
+
+        return builder.Build();
+    }
+
+    private static int[] CollectEntryOffsets(ReadOnlySpan<byte> data, Rsst rsst)
+    {
+        if (rsst.EntryCount == 0) return [];
+
+        int[] offsets = new int[rsst.EntryCount];
+        int idx = 0;
+        int rootOffset = BinaryPrimitives.ReadInt32LittleEndian(data[^Rsst.FooterSize..]);
+        CollectOffsetsFromNode(data, rootOffset, offsets, ref idx);
+        return offsets;
+    }
+
+    private static void CollectOffsetsFromNode(ReadOnlySpan<byte> data, int nodeOffset, int[] offsets, ref int idx)
+    {
+        byte nodeType = data[nodeOffset];
+        int pos = nodeOffset + 1;
+
+        if (nodeType == Rsst.LeafNodeType)
+        {
+            int numEntries = Leb128.Read(data, ref pos);
+            for (int i = 0; i < numEntries; i++)
+            {
+                offsets[idx++] = BinaryPrimitives.ReadInt32LittleEndian(data[pos..]);
+                pos += 4;
+            }
+        }
+        else
+        {
+            int numChildren = Leb128.Read(data, ref pos);
+            int firstChild = BinaryPrimitives.ReadInt32LittleEndian(data[pos..]);
+            pos += 4;
+
+            CollectOffsetsFromNode(data, firstChild, offsets, ref idx);
+
+            for (int i = 1; i < numChildren; i++)
+            {
+                int sepKeyLen = Leb128.Read(data, ref pos);
+                pos += sepKeyLen;
+                int childOffset = BinaryPrimitives.ReadInt32LittleEndian(data[pos..]);
+                pos += 4;
+                CollectOffsetsFromNode(data, childOffset, offsets, ref idx);
+            }
+        }
     }
 }

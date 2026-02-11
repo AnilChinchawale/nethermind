@@ -10,6 +10,7 @@ using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
 using Nethermind.Core.Utils;
 using Nethermind.Int256;
+using Nethermind.Serialization.Rlp;
 using Nethermind.State.Flat.Persistence;
 using Nethermind.Trie;
 
@@ -29,9 +30,11 @@ public sealed class ReadOnlySnapshotBundle(
     private bool _isDisposed;
 
     private static readonly StringLabel _readAccountSnapshotLabel = new("account_snapshot");
+    private static readonly StringLabel _readAccountPersistedLabel = new("account_persisted");
     private static readonly StringLabel _readAccountPersistenceLabel = new("account_persistence");
     private static readonly StringLabel _readAccountPersistenceNullLabel = new("account_persistence_null");
     private static readonly StringLabel _readStorageSnapshotLabel = new("storage_snapshot");
+    private static readonly StringLabel _readStoragePersistedLabel = new("storage_persisted");
     private static readonly StringLabel _readStoragePersistenceLabel = new("storage_persistence");
     private static readonly StringLabel _readStoragePersistenceNullLabel = new("storage_persistence_null");
     private static readonly StringLabel _readStateNodeSnapshotLabel = new("state_node_snapshot");
@@ -54,6 +57,22 @@ public sealed class ReadOnlySnapshotBundle(
             {
                 if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - sw, _readAccountSnapshotLabel);
                 return acc;
+            }
+        }
+
+        // Check persisted snapshots (newest-first)
+        if (persistedSnapshots is not null)
+        {
+            long psw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
+            for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
+            {
+                byte[]? rlp = persistedSnapshots[i].TryGetAccount(address);
+                if (rlp is not null)
+                {
+                    if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readAccountPersistedLabel);
+                    Rlp.ValueDecoderContext ctx = new(rlp);
+                    return AccountDecoder.Slim.Decode(ref ctx);
+                }
             }
         }
 
@@ -104,15 +123,37 @@ public sealed class ReadOnlySnapshotBundle(
             }
         }
 
+        // Check persisted snapshots (newest-first) with self-destruct boundary
+        if (persistedSnapshots is not null)
+        {
+            long psw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
+            for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
+            {
+                byte[]? value = persistedSnapshots[i].TryGetSlot(address, index);
+                if (value is not null)
+                {
+                    if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readStoragePersistedLabel);
+                    return value;
+                }
+
+                // Check self-destruct boundary: if destructed (false flag), storage was cleared
+                bool? selfDestructFlag = persistedSnapshots[i].TryGetSelfDestructFlag(address);
+                if (selfDestructFlag.HasValue && !selfDestructFlag.Value)
+                {
+                    return null;
+                }
+            }
+        }
+
         SlotValue outSlotValue = new();
 
         sw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
         persistenceReader.TryGetSlot(address, index, ref outSlotValue);
-        byte[]? value = outSlotValue.ToEvmBytes();
+        byte[]? slotResult = outSlotValue.ToEvmBytes();
 
         if (recordDetailedMetrics)
         {
-            if (value is null || value.IsZero())
+            if (slotResult is null || slotResult.IsZero())
             {
                 Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - sw, _readStoragePersistenceNullLabel);
             }
@@ -122,7 +163,7 @@ public sealed class ReadOnlySnapshotBundle(
             }
         }
 
-        return value;
+        return slotResult;
     }
 
     public bool TryFindStateNodes(in TreePath path, Hash256 hash, [NotNullWhen(true)] out TrieNode? node)
@@ -172,11 +213,14 @@ public sealed class ReadOnlySnapshotBundle(
         if (persistedSnapshots is not null)
         {
             long psw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
-            byte[]? persisted = persistedSnapshots.TryLoadStateNodeRlp(path);
-            if (persisted is not null)
+            for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
             {
-                if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readStateRlpPersistedLabel);
-                return persisted;
+                byte[]? rlp = persistedSnapshots[i].TryLoadStateNodeRlp(path);
+                if (rlp is not null)
+                {
+                    if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readStateRlpPersistedLabel);
+                    return rlp;
+                }
             }
         }
 
@@ -195,11 +239,14 @@ public sealed class ReadOnlySnapshotBundle(
         if (persistedSnapshots is not null)
         {
             long psw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
-            byte[]? persisted = persistedSnapshots.TryLoadStorageNodeRlp(address, path);
-            if (persisted is not null)
+            for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
             {
-                if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readStorageRlpPersistedLabel);
-                return persisted;
+                byte[]? rlp = persistedSnapshots[i].TryLoadStorageNodeRlp(address, path);
+                if (rlp is not null)
+                {
+                    if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readStorageRlpPersistedLabel);
+                    return rlp;
+                }
             }
         }
 

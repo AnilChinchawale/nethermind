@@ -96,8 +96,13 @@ public class PersistedSnapshotRepositoryTests
 
         using PersistedSnapshotList list = repo.CompileSnapshotList();
 
-        // Should return newest value (rlp2)
-        byte[]? result = list.TryLoadStateNodeRlp(path);
+        // Should return newest value (rlp2) when queried newest-first
+        byte[]? result = null;
+        for (int i = list.Count - 1; i >= 0; i--)
+        {
+            result = list[i].TryLoadStateNodeRlp(path);
+            if (result is not null) break;
+        }
         Assert.That(result, Is.EqualTo(rlp2));
     }
 

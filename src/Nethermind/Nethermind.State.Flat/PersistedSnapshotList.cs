@@ -1,17 +1,11 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using System.Runtime.CompilerServices;
-using Nethermind.Core;
-using Nethermind.Core.Crypto;
-using Nethermind.Int256;
-using Nethermind.Trie;
-
 namespace Nethermind.State.Flat;
 
 /// <summary>
-/// An ordered list of persisted snapshots for layered querying.
-/// Snapshots are ordered newest-first for lookup priority.
+/// A simple disposable list of persisted snapshots, ordered oldest-first.
+/// Domain-specific query logic lives in <see cref="ReadOnlySnapshotBundle"/>.
 /// </summary>
 public sealed class PersistedSnapshotList : IDisposable
 {
@@ -24,27 +18,7 @@ public sealed class PersistedSnapshotList : IDisposable
 
     public int Count => _snapshots.Length;
 
-    public byte[]? TryLoadStateNodeRlp(in TreePath path)
-    {
-        for (int i = _snapshots.Length - 1; i >= 0; i--)
-        {
-            byte[]? rlp = _snapshots[i].TryLoadStateNodeRlp(path);
-            if (rlp is not null) return rlp;
-        }
-
-        return null;
-    }
-
-    public byte[]? TryLoadStorageNodeRlp(Hash256 address, in TreePath path)
-    {
-        for (int i = _snapshots.Length - 1; i >= 0; i--)
-        {
-            byte[]? rlp = _snapshots[i].TryLoadStorageNodeRlp(address, path);
-            if (rlp is not null) return rlp;
-        }
-
-        return null;
-    }
+    public PersistedSnapshot this[int index] => _snapshots[index];
 
     public void Dispose()
     {

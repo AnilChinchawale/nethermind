@@ -110,19 +110,13 @@ public class PersistenceManagerPersistedTests
     }
 
     [Test]
-    public void PersistToSnapshotFile_PersistsViaRepository()
+    public void ConvertToPersistedSnapshot_PersistsViaManager()
     {
         using PersistedSnapshotRepository repo = new(_testDir, maxArenaSize: 4096);
         repo.LoadFromCatalog();
 
         IFlatDbConfig config = new FlatDbConfig();
-        PersistenceManager pm = new(
-            config,
-            Substitute.For<IFinalizedStateProvider>(),
-            Substitute.For<IPersistence>(),
-            Substitute.For<ISnapshotRepository>(),
-            LimboLogs.Instance,
-            repo);
+        PersistedSnapshotManager manager = new(repo, config, LimboLogs.Instance);
 
         StateId s0 = new(0, Keccak.EmptyTreeHash);
         StateId s1 = new(1, Keccak.Compute("1"));
@@ -130,36 +124,12 @@ public class PersistenceManagerPersistedTests
         content.Accounts[TestItem.AddressA] = Build.An.Account.WithBalance(500).TestObject;
         Snapshot snap = new(s0, s1, content, _pool, ResourcePool.Usage.MainBlockProcessing);
 
-        pm.PersistToSnapshotFile(snap);
+        manager.ConvertToPersistedSnapshot(snap);
 
         Assert.That(repo.SnapshotCount, Is.EqualTo(1));
 
-        // Verify data is queryable
         using PersistedSnapshotList list = repo.CompileSnapshotList();
-        // We can't query accounts directly via PersistedSnapshotList (it's for trie nodes),
-        // but we can verify the snapshot was persisted by checking the repository
         Assert.That(list.Count, Is.EqualTo(1));
-    }
-
-    [Test]
-    public void PersistToSnapshotFile_NoOp_WhenRepositoryNull()
-    {
-        IFlatDbConfig config = new FlatDbConfig();
-        PersistenceManager pm = new(
-            config,
-            Substitute.For<IFinalizedStateProvider>(),
-            Substitute.For<IPersistence>(),
-            Substitute.For<ISnapshotRepository>(),
-            LimboLogs.Instance,
-            persistedSnapshotRepository: null);
-
-        StateId s0 = new(0, Keccak.EmptyTreeHash);
-        StateId s1 = new(1, Keccak.Compute("1"));
-        SnapshotContent content = new();
-        Snapshot snap = new(s0, s1, content, _pool, ResourcePool.Usage.MainBlockProcessing);
-
-        // Should not throw
-        Assert.DoesNotThrow(() => pm.PersistToSnapshotFile(snap));
     }
 
     [Test]
@@ -168,20 +138,8 @@ public class PersistenceManagerPersistedTests
         using PersistedSnapshotRepository repo = new(_testDir, maxArenaSize: 4096);
         repo.LoadFromCatalog();
 
-        // Create a PersistenceManager with a mocked current persisted state at block 5
         IFlatDbConfig config = new FlatDbConfig();
-        IPersistence mockPersistence = Substitute.For<IPersistence>();
-        IPersistence.IPersistenceReader mockReader = Substitute.For<IPersistence.IPersistenceReader>();
-        mockReader.CurrentState.Returns(new StateId(5, Keccak.Compute("5")));
-        mockPersistence.CreateReader().Returns(mockReader);
-
-        PersistenceManager pm = new(
-            config,
-            Substitute.For<IFinalizedStateProvider>(),
-            mockPersistence,
-            Substitute.For<ISnapshotRepository>(),
-            LimboLogs.Instance,
-            repo);
+        PersistedSnapshotManager manager = new(repo, config, LimboLogs.Instance);
 
         // Persist snapshots at various block heights
         StateId s0 = new(0, Keccak.EmptyTreeHash);
@@ -204,7 +162,7 @@ public class PersistenceManagerPersistedTests
         Assert.That(repo.SnapshotCount, Is.EqualTo(3));
 
         // Prune before block 5 (removes snapshots with To < 5, i.e., s1 and s3)
-        pm.PrunePersistedSnapshots();
+        manager.PrunePersistedSnapshots(new StateId(5, Keccak.Compute("5")));
 
         Assert.That(repo.SnapshotCount, Is.EqualTo(1)); // Only s6 remains
     }

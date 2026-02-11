@@ -217,9 +217,14 @@ public class PersistedSnapshotTests
         PersistedSnapshot p1 = new(1, s0, s1, PersistedSnapshotType.Base, data1);
         PersistedSnapshot p2 = new(2, s1, s2, PersistedSnapshotType.Base, data2);
 
-        // Ordered oldest-first, but queries newest-first
+        // Ordered oldest-first; query newest-first via indexer
         PersistedSnapshotList list = new([p1, p2]);
-        byte[]? result = list.TryLoadStateNodeRlp(path);
+        byte[]? result = null;
+        for (int i = list.Count - 1; i >= 0; i--)
+        {
+            result = list[i].TryLoadStateNodeRlp(path);
+            if (result is not null) break;
+        }
 
         // Should return the newest (p2) value
         Assert.That(result, Is.EqualTo(rlp2));

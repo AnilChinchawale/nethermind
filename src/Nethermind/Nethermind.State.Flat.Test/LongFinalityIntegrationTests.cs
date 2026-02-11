@@ -86,9 +86,9 @@ public class LongFinalityIntegrationTests
         using PersistedSnapshotList list = repo.CompileSnapshotList();
         Assert.That(list.Count, Is.EqualTo(1));
 
-        // Query all types through the list
-        Assert.That(list.TryLoadStateNodeRlp(statePath), Is.EqualTo(stateRlp));
-        Assert.That(list.TryLoadStorageNodeRlp(storageAddr, storagePath), Is.EqualTo(storageRlp));
+        // Query all types through the individual persisted snapshot
+        Assert.That(list[0].TryLoadStateNodeRlp(statePath), Is.EqualTo(stateRlp));
+        Assert.That(list[0].TryLoadStorageNodeRlp(storageAddr, storagePath), Is.EqualTo(storageRlp));
     }
 
     [Test]
@@ -128,8 +128,14 @@ public class LongFinalityIntegrationTests
             Assert.That(repo.SnapshotCount, Is.EqualTo(2));
 
             using PersistedSnapshotList list = repo.CompileSnapshotList();
-            Assert.That(list.TryLoadStateNodeRlp(path1), Is.EqualTo(rlp1));
-            Assert.That(list.TryLoadStateNodeRlp(path2), Is.EqualTo(rlp2));
+            byte[]? r1 = null, r2 = null;
+            for (int i = list.Count - 1; i >= 0; i--)
+            {
+                r1 ??= list[i].TryLoadStateNodeRlp(path1);
+                r2 ??= list[i].TryLoadStateNodeRlp(path2);
+            }
+            Assert.That(r1, Is.EqualTo(rlp1));
+            Assert.That(r2, Is.EqualTo(rlp2));
         }
     }
 

@@ -26,7 +26,7 @@ public class PersistenceManager(
     IPersistence persistence,
     ISnapshotRepository snapshotRepository,
     ILogManager logManager,
-    PersistedSnapshotRepository? persistedSnapshotRepository = null) : IPersistenceManager
+    IPersistedSnapshotManager persistedSnapshotManager) : IPersistenceManager
 {
     private readonly ILogger _logger = logManager.GetClassLogger();
     private readonly int _minReorgDepth = configuration.MinReorgDepth;
@@ -108,9 +108,43 @@ public class PersistenceManager(
         return null;
     }
 
-    internal Snapshot? DetermineSnapshotToPersist(StateId latestSnapshot)
+    /// <summary>
+    /// Collect non-compacted snapshots starting from currentPersistedState that can be converted
+    /// to persisted snapshots (RSST files) instead of being force-persisted to RocksDB.
+    /// </summary>
+    private Snapshot[]? CollectSnapshotsToConvert(StateId currentPersistedState)
     {
-        // Actually, the latest compacted snapshot, not the latest snapshot.
+        List<Snapshot> toConvert = new();
+        StateId current = currentPersistedState;
+
+        // Walk forward from persisted state, collecting non-compacted snapshots
+        for (long bn = current.BlockNumber + 1; bn <= current.BlockNumber + _compactSize; bn++)
+        {
+            using ArrayPoolList<StateId> states = snapshotRepository.GetStatesAtBlockNumber(bn);
+            bool found = false;
+            foreach (StateId stateId in states)
+            {
+                if (snapshotRepository.TryLeaseState(stateId, out Snapshot? snapshot))
+                {
+                    if (snapshot.From == current)
+                    {
+                        toConvert.Add(snapshot);
+                        current = snapshot.To;
+                        found = true;
+                        break;
+                    }
+                    snapshot.Dispose();
+                }
+            }
+            if (!found) break;
+        }
+
+        if (toConvert.Count == 0) return null;
+        return toConvert.ToArray();
+    }
+
+    internal (Snapshot? ToPersist, Snapshot[]? ToConvert) DetermineSnapshotAction(StateId latestSnapshot)
+    {
         long lastSnapshotNumber = latestSnapshot.BlockNumber;
 
         StateId currentPersistedState = GetCurrentPersistedStateId();
@@ -119,10 +153,8 @@ public class PersistenceManager(
         if (inMemoryStateDepth - _compactSize < _minReorgDepth)
         {
             // Keep some state in memory
-            return null;
+            return (null, null);
         }
-
-        Snapshot? snapshotToPersist;
 
         long afterPersistPersistedBlockNumber = currentPersistedState.BlockNumber + _compactSize;
         if (afterPersistPersistedBlockNumber > finalizedBlockNumber)
@@ -130,41 +162,53 @@ public class PersistenceManager(
             if (inMemoryStateDepth <= _maxReorgDepth)
             {
                 // Unfinalized, and still under max reorg depth
-                return null;
+                return (null, null);
             }
 
-            if (_logger.IsWarn) _logger.Warn($"Very long unfinalized state. Force persisting to conserve memory. finalized block number is {finalizedBlockNumber}.");
-            snapshotToPersist = GetFirstSnapshotAtBlockNumber(currentPersistedState.BlockNumber + _compactSize, currentPersistedState, true) ??
-                                GetFirstSnapshotAtBlockNumber(currentPersistedState.BlockNumber + 1, currentPersistedState, false);
+            // Memory pressure with unfinalized state: convert to persisted snapshots instead of force-persisting to RocksDB
+            if (_logger.IsWarn) _logger.Warn($"Very long unfinalized state. Converting to persisted snapshots. finalized block number is {finalizedBlockNumber}.");
+            Snapshot[]? toConvert = CollectSnapshotsToConvert(currentPersistedState);
+            return (null, toConvert);
         }
-        else
-        {
-            snapshotToPersist = GetFinalizedSnapshotAtBlockNumber(currentPersistedState.BlockNumber + _compactSize, currentPersistedState, true) ??
-                                GetFinalizedSnapshotAtBlockNumber(currentPersistedState.BlockNumber + 1, currentPersistedState, false);
-        }
+
+        Snapshot? snapshotToPersist =
+            GetFinalizedSnapshotAtBlockNumber(currentPersistedState.BlockNumber + _compactSize, currentPersistedState, true) ??
+            GetFinalizedSnapshotAtBlockNumber(currentPersistedState.BlockNumber + 1, currentPersistedState, false);
 
         if (snapshotToPersist is null)
         {
             if (_logger.IsWarn) _logger.Warn($"Unable to find snapshot to persist. Current persisted state {currentPersistedState}. Compact size {_compactSize}.");
         }
 
-        return snapshotToPersist;
+        return (snapshotToPersist, null);
     }
 
     public void AddToPersistence(StateId latestSnapshot)
     {
         using Lock.Scope scope = _persistenceLock.EnterScope();
-        // Attempt to add snapshots into bigcache
         while (true)
         {
-            Snapshot? snapshotToSave = DetermineSnapshotToPersist(latestSnapshot);
+            (Snapshot? toPersist, Snapshot[]? toConvert) = DetermineSnapshotAction(latestSnapshot);
 
-            if (snapshotToSave is null) return;
-            using Snapshot _ = snapshotToSave; // dispose
-
-            // Add the canon snapshot
-            PersistSnapshot(snapshotToSave);
-            _currentPersistedStateId = snapshotToSave.To;
+            if (toPersist is not null)
+            {
+                using Snapshot _ = toPersist;
+                PersistSnapshot(toPersist);
+                _currentPersistedStateId = toPersist.To;
+            }
+            else if (toConvert is not null)
+            {
+                foreach (Snapshot snapshot in toConvert)
+                {
+                    using Snapshot _ = snapshot;
+                    persistedSnapshotManager.ConvertToPersistedSnapshot(snapshot);
+                }
+                break; // Don't loop — conversion is not persistence
+            }
+            else
+            {
+                break;
+            }
         }
     }
 
@@ -320,107 +364,9 @@ public class PersistenceManager(
     }
 
     /// <summary>
-    /// Persist an in-memory snapshot to the persisted snapshot file system.
+    /// Merge two RSST snapshots' data using streaming merge-sort.
+    /// Newer entries override older ones when keys match.
     /// </summary>
-    internal void PersistToSnapshotFile(Snapshot snapshot)
-    {
-        if (persistedSnapshotRepository is null) return;
-
-        if (_logger.IsDebug) _logger.Debug($"Persisting snapshot to file: {snapshot.From} -> {snapshot.To}");
-        persistedSnapshotRepository.PersistSnapshot(snapshot);
-        Metrics.PersistedSnapshotWrites++;
-        Metrics.PersistedSnapshotCount = persistedSnapshotRepository.SnapshotCount;
-    }
-
-    /// <summary>
-    /// Try to compact adjacent persisted snapshots at the same level.
-    /// Uses logarithmic compaction: pairs of snapshots spanning the same
-    /// number of blocks are merged into a single larger snapshot.
-    /// </summary>
-    internal void TryCompactPersistedSnapshots()
-    {
-        if (persistedSnapshotRepository is null) return;
-
-        (PersistedSnapshot? older, PersistedSnapshot? newer) = FindCompactionCandidates();
-        if (older is null || newer is null) return;
-
-        if (_logger.IsDebug) _logger.Debug($"Compacting persisted snapshots {older.Id} and {newer.Id}");
-
-        byte[] mergedData = MergeSnapshotData(older.Data, newer.Data);
-        persistedSnapshotRepository.PersistCompactedSnapshot(older.From, newer.To, mergedData, [older.Id, newer.Id]);
-        Metrics.PersistedSnapshotCompactions++;
-        Metrics.PersistedSnapshotCount = persistedSnapshotRepository.SnapshotCount;
-    }
-
-    /// <summary>
-    /// Prune persisted snapshots that are older than the finalized state.
-    /// </summary>
-    internal void PrunePersistedSnapshots()
-    {
-        if (persistedSnapshotRepository is null) return;
-
-        StateId currentPersisted = GetCurrentPersistedStateId();
-        if (currentPersisted.BlockNumber <= 0) return;
-
-        int pruned = persistedSnapshotRepository.PruneBefore(currentPersisted);
-        if (pruned > 0)
-        {
-            Metrics.PersistedSnapshotPrunes += pruned;
-            Metrics.PersistedSnapshotCount = persistedSnapshotRepository.SnapshotCount;
-            if (_logger.IsDebug) _logger.Debug($"Pruned {pruned} persisted snapshots before block {currentPersisted.BlockNumber}");
-        }
-    }
-
-    /// <summary>
-    /// Find two adjacent persisted snapshots at the same level for compaction.
-    /// </summary>
-    internal (PersistedSnapshot? older, PersistedSnapshot? newer) FindCompactionCandidates()
-    {
-        if (persistedSnapshotRepository is null) return (null, null);
-
-        using PersistedSnapshotList list = persistedSnapshotRepository.CompileSnapshotList();
-        if (list.Count < 2) return (null, null);
-
-        // We need to iterate through snapshots to find adjacent pairs at the same level.
-        // Since CompileSnapshotList returns oldest-first, we check consecutive pairs.
-        // Unfortunately PersistedSnapshotList doesn't expose indexed access,
-        // so we work through the repository directly.
-        return (null, null); // Compaction candidates found through repository
-    }
-
-    /// <summary>
-    /// Merge two RSST snapshots' data. Newer entries override older ones.
-    /// </summary>
-    internal static byte[] MergeSnapshotData(ReadOnlyMemory<byte> olderData, ReadOnlyMemory<byte> newerData)
-    {
-        SortedDictionary<byte[], byte[]> merged = new(Bytes.Comparer);
-
-        // Add older entries first
-        Rsst.Rsst older = new(olderData.Span);
-        foreach (Rsst.Rsst.KeyValueEntry entry in older)
-        {
-            merged[entry.Key.ToArray()] = entry.Value.ToArray();
-        }
-
-        // Override with newer entries
-        Rsst.Rsst newer = new(newerData.Span);
-        foreach (Rsst.Rsst.KeyValueEntry entry in newer)
-        {
-            merged[entry.Key.ToArray()] = entry.Value.ToArray();
-        }
-
-        // Build merged RSST
-        RsstBuilder builder = new();
-        foreach (KeyValuePair<byte[], byte[]> kv in merged)
-        {
-            builder.Add(kv.Key, kv.Value);
-        }
-
-        return builder.Build();
-    }
-
-    /// <summary>
-    /// Get the PersistedSnapshotRepository for external use (e.g., FlatDbManager).
-    /// </summary>
-    public PersistedSnapshotRepository? PersistedSnapshots => persistedSnapshotRepository;
+    internal static byte[] MergeSnapshotData(ReadOnlyMemory<byte> olderData, ReadOnlyMemory<byte> newerData) =>
+        RsstBuilder.StreamingMerge(olderData.Span, newerData.Span);
 }

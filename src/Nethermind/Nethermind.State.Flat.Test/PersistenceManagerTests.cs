@@ -53,7 +53,8 @@ public class PersistenceManagerTests
             _finalizedStateProvider,
             _persistence,
             _snapshotRepository,
-            LimboLogs.Instance);
+            LimboLogs.Instance,
+            Substitute.For<IPersistedSnapshotManager>());
     }
 
     [TearDown]
@@ -95,24 +96,23 @@ public class PersistenceManagerTests
         return snapshot;
     }
 
-    #region Basic Behavior Tests
-
-    [Test]
-    public void DetermineSnapshotToPersist_InsufficientInMemoryDepth_ReturnsNull()
+[Test]
+    public void DetermineSnapshotAction_InsufficientInMemoryDepth_ReturnsNull()
     {
         // Setup: persisted at Block0 (0), latest at 60, after persist would be < 64 minimum
         StateId persisted = Block0;
         StateId latest = CreateStateId(60);
         _finalizedStateProvider.SetFinalizedBlockNumber(100);
 
-        Snapshot? result = _persistenceManager.DetermineSnapshotToPersist(latest);
+        (Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
 
-        Assert.That(result, Is.Null);
+        Assert.That(toPersist, Is.Null);
+        Assert.That(toConvert, Is.Null);
     }
 
-    [TestCase(true, TestName = "DetermineSnapshotToPersist_SufficientDepthAndFinalized_ReturnsCompactedSnapshot")]
-    [TestCase(false, TestName = "DetermineSnapshotToPersist_SufficientDepthAndFinalized_FallsBackToUncompacted")]
-    public void DetermineSnapshotToPersist_SufficientDepthAndFinalized(bool useCompacted)
+    [TestCase(true, TestName = "DetermineSnapshotAction_SufficientDepthAndFinalized_ReturnsCompactedSnapshot")]
+    [TestCase(false, TestName = "DetermineSnapshotAction_SufficientDepthAndFinalized_FallsBackToUncompacted")]
+    public void DetermineSnapshotAction_SufficientDepthAndFinalized(bool useCompacted)
     {
         // Setup: persisted at Block0, latest at 100, finalized at 100
         StateId persisted = Block0;
@@ -128,21 +128,18 @@ public class PersistenceManagerTests
         // Create snapshot (compacted or not based on parameter)
         using Snapshot expectedSnapshot = CreateSnapshot(persisted, target, compacted: useCompacted);
 
-        Snapshot? result = _persistenceManager.DetermineSnapshotToPersist(latest);
+        (Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
 
-        Assert.That(result, Is.Not.Null);
-        Assert.That(result!.From, Is.EqualTo(persisted));
-        Assert.That(result.To, Is.EqualTo(target));
+        Assert.That(toPersist, Is.Not.Null);
+        Assert.That(toConvert, Is.Null);
+        Assert.That(toPersist!.From, Is.EqualTo(persisted));
+        Assert.That(toPersist.To, Is.EqualTo(target));
 
-        result.Dispose();
+        toPersist.Dispose();
     }
 
-    #endregion
-
-    #region Unfinalized State Tests
-
-    [Test]
-    public void DetermineSnapshotToPersist_UnfinalizedButBelowForceLimit_ReturnsNull()
+[Test]
+    public void DetermineSnapshotAction_UnfinalizedButBelowForceLimit_ReturnsNull()
     {
         // Setup: persisted at Block0, latest at 150, finalized at 10 (way behind)
         // After persist would be at 16, which is > finalized
@@ -151,44 +148,38 @@ public class PersistenceManagerTests
         StateId latest = CreateStateId(150);
         _finalizedStateProvider.SetFinalizedBlockNumber(10);
 
-        Snapshot? result = _persistenceManager.DetermineSnapshotToPersist(latest);
+        (Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
 
-        Assert.That(result, Is.Null);
+        Assert.That(toPersist, Is.Null);
+        Assert.That(toConvert, Is.Null);
     }
 
-    [TestCase(true, TestName = "DetermineSnapshotToPersist_UnfinalizedAndAboveForceLimit_ForcePersistsCompacted")]
-    [TestCase(false, TestName = "DetermineSnapshotToPersist_UnfinalizedAndAboveForceLimit_FallsBackToUncompacted")]
-    public void DetermineSnapshotToPersist_UnfinalizedAndAboveForceLimit(bool useCompacted)
+    [Test]
+    public void DetermineSnapshotAction_UnfinalizedAndAboveForceLimit_ReturnsToConvert()
     {
         // Setup: persisted at Block0, latest at 300, finalized at 10
         // In-memory depth is ~301 (> 256 forced boundary)
+        // Now returns ToConvert instead of force-persisting
         StateId persisted = Block0;
         StateId latest = CreateStateId(300);
-
-        // Vary target block and compaction based on parameter
-        int targetBlock = useCompacted ? 16 : 1; // compacted uses 16, fallback uses 1
-        StateId target = CreateStateId(targetBlock);
+        StateId target = CreateStateId(1);
 
         _finalizedStateProvider.SetFinalizedBlockNumber(10);
 
-        // Create snapshot (compacted or not based on parameter)
-        using Snapshot expectedSnapshot = CreateSnapshot(persisted, target, compacted: useCompacted);
+        // Create non-compacted snapshot chain from persisted state
+        using Snapshot expectedSnapshot = CreateSnapshot(persisted, target, compacted: false);
 
-        Snapshot? result = _persistenceManager.DetermineSnapshotToPersist(latest);
+        (Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
 
-        Assert.That(result, Is.Not.Null);
-        Assert.That(result!.From, Is.EqualTo(persisted));
-        Assert.That(result.To, Is.EqualTo(target));
+        Assert.That(toPersist, Is.Null);
+        Assert.That(toConvert, Is.Not.Null);
+        Assert.That(toConvert!.Length, Is.GreaterThan(0));
 
-        result.Dispose();
+        foreach (Snapshot s in toConvert) s.Dispose();
     }
 
-    #endregion
-
-    #region Edge Cases
-
-    [Test]
-    public void DetermineSnapshotToPersist_NoSnapshotAvailable_ReturnsNull()
+[Test]
+    public void DetermineSnapshotAction_NoSnapshotAvailable_ReturnsNull()
     {
         // Setup: sufficient depth but no snapshots in repository
         StateId persisted = Block0;
@@ -198,13 +189,13 @@ public class PersistenceManagerTests
 
         // Don't create any snapshots
 
-        Snapshot? result = _persistenceManager.DetermineSnapshotToPersist(latest);
+        (Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
 
-        Assert.That(result, Is.Null);
+        Assert.That(toPersist, Is.Null);
     }
 
     [Test]
-    public void DetermineSnapshotToPersist_SnapshotWithWrongFromState_ReturnsNull()
+    public void DetermineSnapshotAction_SnapshotWithWrongFromState_ReturnsNull()
     {
         // Setup: snapshot exists but doesn't start from current persisted state
         StateId persisted = Block0;
@@ -217,13 +208,13 @@ public class PersistenceManagerTests
         // Create snapshot with wrong "from" state
         using Snapshot wrongSnapshot = CreateSnapshot(wrongFrom, target, compacted: true);
 
-        Snapshot? result = _persistenceManager.DetermineSnapshotToPersist(latest);
+        (Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
 
-        Assert.That(result, Is.Null);
+        Assert.That(toPersist, Is.Null);
     }
 
     [Test]
-    public void DetermineSnapshotToPersist_MultipleStatesAtBlock_SelectsCorrectOne()
+    public void DetermineSnapshotAction_MultipleStatesAtBlock_SelectsCorrectOne()
     {
         // Setup: multiple state roots at same block number (reorg scenario)
         StateId persisted = Block0;
@@ -237,16 +228,16 @@ public class PersistenceManagerTests
         using Snapshot snapshot1 = CreateSnapshot(persisted, target1, compacted: true);
         using Snapshot snapshot2 = CreateSnapshot(persisted, target2, compacted: true);
 
-        Snapshot? result = _persistenceManager.DetermineSnapshotToPersist(latest);
+        (Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
 
-        Assert.That(result, Is.Not.Null);
-        Assert.That(result!.To.StateRoot.Bytes.ToArray(), Is.EqualTo(target2.StateRoot.Bytes.ToArray())); // Should select finalized one
+        Assert.That(toPersist, Is.Not.Null);
+        Assert.That(toPersist!.To.StateRoot.Bytes.ToArray(), Is.EqualTo(target2.StateRoot.Bytes.ToArray()));
 
-        result.Dispose();
+        toPersist.Dispose();
     }
 
     [Test]
-    public void DetermineSnapshotToPersist_ExactlyAtMinimumBoundary_ReturnsNull()
+    public void DetermineSnapshotAction_ExactlyAtMinimumBoundary_ReturnsNull()
     {
         // Setup: persisted at Block0 (0), latest at 79
         // After persist would be at 15, leaving depth of 64 (exactly at minimum boundary)
@@ -254,13 +245,13 @@ public class PersistenceManagerTests
         StateId latest = CreateStateId(79);
         _finalizedStateProvider.SetFinalizedBlockNumber(100);
 
-        Snapshot? result = _persistenceManager.DetermineSnapshotToPersist(latest);
+        (Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
 
-        Assert.That(result, Is.Null);
+        Assert.That(toPersist, Is.Null);
     }
 
     [Test]
-    public void DetermineSnapshotToPersist_OneAboveMinimumBoundary_ReturnsSnapshot()
+    public void DetermineSnapshotAction_OneAboveMinimumBoundary_ReturnsSnapshot()
     {
         // Setup: persisted at Block0 (0), latest at 80
         // After persist would be at 15, leaving depth of 65 (one above minimum boundary)
@@ -272,18 +263,14 @@ public class PersistenceManagerTests
 
         using Snapshot expectedSnapshot = CreateSnapshot(persisted, target, compacted: true);
 
-        Snapshot? result = _persistenceManager.DetermineSnapshotToPersist(latest);
+        (Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
 
-        Assert.That(result, Is.Not.Null);
+        Assert.That(toPersist, Is.Not.Null);
 
-        result!.Dispose();
+        toPersist!.Dispose();
     }
 
-    #endregion
-
-    #region PersistSnapshot Tests
-
-    [Test]
+[Test]
     public void PersistSnapshot_WithAccountsStorageAndTrieNodes_WritesToBatch()
     {
         // Arrange
@@ -355,11 +342,7 @@ public class PersistenceManagerTests
         _persistence.Received(1).CreateWriteBatch(from, to);
     }
 
-    #endregion
-
-    #region AddToPersistence Tests
-
-    [Test]
+[Test]
     public void AddToPersistence_WithAvailableSnapshot_PersistsAndUpdatesState()
     {
         // Arrange
@@ -387,11 +370,7 @@ public class PersistenceManagerTests
         Assert.That(_persistenceManager.GetCurrentPersistedStateId(), Is.EqualTo(to));
     }
 
-    #endregion
-
-    #region FlushToPersistence Tests
-
-    [Test]
+[Test]
     public void FlushToPersistence_NoSnapshots_ReturnsCurrentPersistedState()
     {
         // Arrange - no snapshots added
@@ -505,11 +484,7 @@ public class PersistenceManagerTests
         });
     }
 
-    #endregion
-
-    #region Helper Classes
-
-    private class TestFinalizedStateProvider : IFinalizedStateProvider
+private class TestFinalizedStateProvider : IFinalizedStateProvider
     {
         private long _finalizedBlockNumber;
         private readonly Dictionary<long, Hash256> _finalizedStateRoots = new();
@@ -524,5 +499,4 @@ public class PersistenceManagerTests
             _finalizedStateRoots.TryGetValue(blockNumber, out Hash256? root) ? root : null;
     }
 
-    #endregion
 }
