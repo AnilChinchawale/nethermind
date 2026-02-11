@@ -9,7 +9,7 @@ using Nethermind.Serialization.Rlp;
 using Nethermind.State.Flat.Rsst;
 using Nethermind.Trie;
 
-namespace Nethermind.State.Flat;
+namespace Nethermind.State.Flat.PersistedSnapshots;
 
 /// <summary>
 /// Builds RSST byte data from an in-memory <see cref="Snapshot"/>.

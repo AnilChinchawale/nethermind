@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using Nethermind.Core.Crypto;
 using Nethermind.Db;
+using Nethermind.State.Flat.PersistedSnapshots;
 using Nethermind.State.Flat.Storage;
 using NUnit.Framework;
 

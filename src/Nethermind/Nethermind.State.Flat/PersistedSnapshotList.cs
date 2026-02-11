@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-namespace Nethermind.State.Flat;
+namespace Nethermind.State.Flat.PersistedSnapshots;
 
 /// <summary>
 /// A simple disposable list of persisted snapshots, ordered oldest-first.

@@ -3,6 +3,7 @@
 
 using System.Buffers.Binary;
 using Nethermind.Core.Crypto;
+using Nethermind.State.Flat.PersistedSnapshots;
 
 namespace Nethermind.State.Flat.Storage;
 

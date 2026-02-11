@@ -4,7 +4,7 @@
 using System.Collections.Concurrent;
 using Nethermind.State.Flat.Storage;
 
-namespace Nethermind.State.Flat;
+namespace Nethermind.State.Flat.PersistedSnapshots;
 
 /// <summary>
 /// Manages persisted snapshots on disk with a two-layer design (base + compacted),

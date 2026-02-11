@@ -5,7 +5,7 @@ using Nethermind.Db;
 using Nethermind.Logging;
 using Nethermind.State.Flat.Rsst;
 
-namespace Nethermind.State.Flat;
+namespace Nethermind.State.Flat.PersistedSnapshots;
 
 /// <summary>
 /// Manages conversion of in-memory snapshots to persisted snapshots (RSST files)

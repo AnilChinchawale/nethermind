@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System.Runtime.CompilerServices;
+using Nethermind.State.Flat.PersistedSnapshots;
 
 namespace Nethermind.State.Flat;
 

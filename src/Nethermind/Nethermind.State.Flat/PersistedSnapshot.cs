@@ -9,7 +9,7 @@ using Nethermind.Int256;
 using Nethermind.State.Flat.Rsst;
 using Nethermind.Trie;
 
-namespace Nethermind.State.Flat;
+namespace Nethermind.State.Flat.PersistedSnapshots;
 
 /// <summary>
 /// A persisted snapshot backed by RSST data on disk (or in memory).
