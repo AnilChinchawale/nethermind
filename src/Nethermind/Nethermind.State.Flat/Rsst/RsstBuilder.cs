@@ -22,6 +22,8 @@ public ref struct RsstBuilder
     private Span<byte> _output;
     private int _position;
 
+    private readonly int _extraSeparatorLength;
+
     // Working buffers allocated from ArrayPool
     private readonly byte[] _separatorBuffer;
     private int _separatorBufferPos;
@@ -43,10 +45,11 @@ public ref struct RsstBuilder
     /// Create builder writing into output span.
     /// Allocates working buffers from ArrayPool - call Dispose() to return them.
     /// </summary>
-    public RsstBuilder(Span<byte> output)
+    public RsstBuilder(Span<byte> output, int extraSeparatorLength = 0)
     {
         _output = output;
         _position = 0;
+        _extraSeparatorLength = extraSeparatorLength;
         _separatorBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(65536);
         _separatorBufferPos = 0;
         _entriesBuffer = System.Buffers.ArrayPool<RsstEntry>.Shared.Rent(10000);
@@ -88,7 +91,8 @@ public ref struct RsstBuilder
         int sepLen = ComputeSeparatorLength(
             _prevKeyBuffer.AsSpan(0, _prevKeyLength),
             key,
-            nextKey: default);
+            nextKey: default,
+            _extraSeparatorLength);
 
         // Store separator in contiguous buffer
         if (_separatorBufferPos + sepLen > _separatorBuffer.Length)
@@ -571,7 +575,7 @@ public ref struct RsstBuilder
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int ComputeSeparatorLength(ReadOnlySpan<byte> prevKey, ReadOnlySpan<byte> currKey, ReadOnlySpan<byte> nextKey)
+    private static int ComputeSeparatorLength(ReadOnlySpan<byte> prevKey, ReadOnlySpan<byte> currKey, ReadOnlySpan<byte> nextKey, int extraSeparatorLength = 0)
     {
         int minVsPrev = 0;
         if (!prevKey.IsEmpty)
@@ -591,7 +595,7 @@ public ref struct RsstBuilder
         len = Math.Min(len, currKey.Length);
         if (len == 0) len = Math.Min(1, currKey.Length);
 
-        return len;
+        return Math.Min(len + extraSeparatorLength, currKey.Length);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -630,7 +634,7 @@ public ref struct RsstBuilder
         return minLen;
     }
 
-    public static int StreamingMerge(ReadOnlySpan<byte> older, ReadOnlySpan<byte> newer, Span<byte> output, int startOffset = 0)
+    public static int StreamingMerge(ReadOnlySpan<byte> older, ReadOnlySpan<byte> newer, Span<byte> output, int startOffset = 0, int extraSeparatorLength = 0)
     {
         Rsst olderRsst = new(older);
         Rsst newerRsst = new(newer);
@@ -642,7 +646,7 @@ public ref struct RsstBuilder
             return startOffset + 2;
         }
 
-        using (RsstBuilder builder = new(output[startOffset..]))
+        using (RsstBuilder builder = new(output[startOffset..], extraSeparatorLength))
         {
 
             using Rsst.Enumerator olderEnum = olderRsst.GetEnumerator();

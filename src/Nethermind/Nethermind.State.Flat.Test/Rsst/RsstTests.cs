@@ -179,18 +179,6 @@ public class RsstTests
         Assert.That(Encoding.UTF8.GetString(v3), Is.EqualTo("x"));
     }
 
-    [Ignore("Tests internal implementation detail - ComputeSeparatorKey is private")]
-    [TestCase(new byte[] { 0x01, 0x02 }, new byte[] { 0x01, 0x03 })]
-    [TestCase(new byte[] { 0x01 }, new byte[] { 0x02 })]
-    [TestCase(new byte[] { 0x01, 0xFF }, new byte[] { 0x02, 0x00 })]
-    [TestCase(new byte[] { 0x01, 0x02 }, new byte[] { 0x01, 0x02, 0x03 })]
-    public void SeparatorKey_IsBetweenLeftAndRight(byte[] left, byte[] right)
-    {
-        // This test requires access to private ComputeSeparatorKey method
-        // Separator key computation is tested indirectly through other round-trip tests
-        Assert.Ignore("Internal implementation test");
-    }
-
     [TestCase(100, 42)]
     [TestCase(1000, 123)]
     [TestCase(5000, 999)]
@@ -356,6 +344,154 @@ public class RsstTests
             idx++;
         }
         Assert.That(idx, Is.EqualTo(deduped.Count));
+    }
+
+    [TestCase(100, 32, 32, 42, 0)]
+    [TestCase(100, 32, 32, 42, 2)]
+    [TestCase(100, 32, 32, 42, 30)]
+    [TestCase(200, 20, 64, 55, 18)]
+    [TestCase(500, 52, 32, 101, 50)]
+    public void Binary_Keys_WithExtraSeparatorLength_RoundTrip(int count, int keyLen, int maxValLen, int seed, int extraSepLen)
+    {
+        Random rng = new(seed);
+        (byte[] Key, byte[] Value)[] entries = new (byte[], byte[])[count];
+        for (int i = 0; i < count; i++)
+        {
+            entries[i].Key = new byte[keyLen];
+            entries[i].Value = new byte[rng.Next(0, maxValLen + 1)];
+            rng.NextBytes(entries[i].Key);
+            rng.NextBytes(entries[i].Value);
+        }
+        Array.Sort(entries, (a, b) => a.Key.AsSpan().SequenceCompareTo(b.Key));
+
+        // Deduplicate — keep last value for duplicate keys
+        List<(byte[] Key, byte[] Value)> deduped = new(count);
+        for (int i = 0; i < entries.Length; i++)
+        {
+            if (i + 1 < entries.Length && entries[i].Key.AsSpan().SequenceEqual(entries[i + 1].Key))
+                continue;
+            deduped.Add(entries[i]);
+        }
+
+        byte[] data = RsstTestUtil.BuildToArray((ref RsstBuilder builder) =>
+        {
+            foreach ((byte[] key, byte[] value) in deduped)
+                builder.Add(key, value);
+        }, extraSeparatorLength: extraSepLen);
+
+        Rsst.Rsst rsst = new(data);
+        Assert.That(rsst.EntryCount, Is.EqualTo(deduped.Count));
+
+        // Positive lookups
+        foreach ((byte[] key, byte[] value) in deduped)
+        {
+            Assert.That(rsst.TryGet(key, out ReadOnlySpan<byte> val), Is.True,
+                $"Key {BitConverter.ToString(key)} not found");
+            Assert.That(val.SequenceEqual(value), Is.True);
+        }
+
+        // Negative lookups — 50 random non-existent keys
+        HashSet<byte[]> existingKeys = new(deduped.ConvertAll(e => e.Key), new ByteArrayComparer());
+        Random negRng = new(seed + 9999);
+        int negChecked = 0;
+        while (negChecked < 50)
+        {
+            byte[] randomKey = new byte[keyLen];
+            negRng.NextBytes(randomKey);
+            if (existingKeys.Contains(randomKey)) continue;
+            Assert.That(rsst.TryGet(randomKey, out _), Is.False,
+                $"Non-existent key {BitConverter.ToString(randomKey)} falsely found");
+            negChecked++;
+        }
+
+        // Enumeration order
+        int idx = 0;
+        foreach (Rsst.Rsst.KeyValueEntry entry in rsst)
+        {
+            Assert.That(entry.Key.SequenceEqual(deduped[idx].Key), Is.True);
+            Assert.That(entry.Value.SequenceEqual(deduped[idx].Value), Is.True);
+            idx++;
+        }
+        Assert.That(idx, Is.EqualTo(deduped.Count));
+    }
+
+    [TestCase(100, 4, 32, 32, 42, 30)]
+    [TestCase(300, 4, 32, 32, 77, 30)]
+    public void Binary_Keys_MultiLevel_WithExtraSeparatorLength_RoundTrip(int count, int maxLeaf, int keyLen, int maxValLen, int seed, int extraSepLen)
+    {
+        Random rng = new(seed);
+        (byte[] Key, byte[] Value)[] entries = new (byte[], byte[])[count];
+        for (int i = 0; i < count; i++)
+        {
+            entries[i].Key = new byte[keyLen];
+            entries[i].Value = new byte[rng.Next(0, maxValLen + 1)];
+            rng.NextBytes(entries[i].Key);
+            rng.NextBytes(entries[i].Value);
+        }
+        Array.Sort(entries, (a, b) => a.Key.AsSpan().SequenceCompareTo(b.Key));
+
+        // Deduplicate
+        List<(byte[] Key, byte[] Value)> deduped = new(count);
+        for (int i = 0; i < entries.Length; i++)
+        {
+            if (i + 1 < entries.Length && entries[i].Key.AsSpan().SequenceEqual(entries[i + 1].Key))
+                continue;
+            deduped.Add(entries[i]);
+        }
+
+        byte[] data = RsstTestUtil.BuildToArray((ref RsstBuilder builder) =>
+        {
+            foreach ((byte[] key, byte[] value) in deduped)
+                builder.Add(key, value);
+        }, maxLeafEntries: maxLeaf, extraSeparatorLength: extraSepLen);
+
+        Rsst.Rsst rsst = new(data);
+        Assert.That(rsst.EntryCount, Is.EqualTo(deduped.Count));
+
+        // Positive lookups
+        foreach ((byte[] key, byte[] value) in deduped)
+        {
+            Assert.That(rsst.TryGet(key, out ReadOnlySpan<byte> val), Is.True,
+                $"Key {BitConverter.ToString(key)} not found");
+            Assert.That(val.SequenceEqual(value), Is.True);
+        }
+
+        // Negative lookups
+        HashSet<byte[]> existingKeys = new(deduped.ConvertAll(e => e.Key), new ByteArrayComparer());
+        Random negRng = new(seed + 9999);
+        int negChecked = 0;
+        while (negChecked < 50)
+        {
+            byte[] randomKey = new byte[keyLen];
+            negRng.NextBytes(randomKey);
+            if (existingKeys.Contains(randomKey)) continue;
+            Assert.That(rsst.TryGet(randomKey, out _), Is.False,
+                $"Non-existent key {BitConverter.ToString(randomKey)} falsely found");
+            negChecked++;
+        }
+
+        // Enumeration order
+        int idx = 0;
+        foreach (Rsst.Rsst.KeyValueEntry entry in rsst)
+        {
+            Assert.That(entry.Key.SequenceEqual(deduped[idx].Key), Is.True);
+            Assert.That(entry.Value.SequenceEqual(deduped[idx].Value), Is.True);
+            idx++;
+        }
+        Assert.That(idx, Is.EqualTo(deduped.Count));
+    }
+
+    private sealed class ByteArrayComparer : IEqualityComparer<byte[]>
+    {
+        public bool Equals(byte[]? x, byte[]? y) =>
+            x is not null && y is not null && x.AsSpan().SequenceEqual(y);
+
+        public int GetHashCode(byte[] obj)
+        {
+            HashCode hash = new();
+            hash.AddBytes(obj);
+            return hash.ToHashCode();
+        }
     }
 
     [Test]

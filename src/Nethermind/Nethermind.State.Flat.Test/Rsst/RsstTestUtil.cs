@@ -14,13 +14,13 @@ internal static class RsstTestUtil
     /// <summary>
     /// Helper for tests: Create builder, execute action, dispose and return result.
     /// </summary>
-    public static byte[] BuildToArray(BuildAction buildAction, int maxLeafEntries = Nethermind.State.Flat.Rsst.Rsst.MaxLeafEntries)
+    public static byte[] BuildToArray(BuildAction buildAction, int maxLeafEntries = Nethermind.State.Flat.Rsst.Rsst.MaxLeafEntries, int extraSeparatorLength = 0)
     {
         byte[] buffer = ArrayPool<byte>.Shared.Rent(10 * 1024 * 1024);  // Larger buffer for tests
         try
         {
             Span<byte> bufferSpan = buffer.AsSpan();
-            RsstBuilder builder = new(bufferSpan);
+            RsstBuilder builder = new(bufferSpan, extraSeparatorLength);
             try
             {
                 buildAction(ref builder);
