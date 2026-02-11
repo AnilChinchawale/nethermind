@@ -99,7 +99,13 @@ public readonly ref struct Rsst
             if (cmp == 0 && key.Length < separator.Length)
                 cmp = -1;
             else if (cmp == 0)
-                return VerifyAndReadEntry(mid, node, header, key, out value);
+            {
+                if (VerifyAndReadEntry(mid, node, header, key, out value))
+                    return true;
+                // Separator is a prefix of key but full key didn't match — search right
+                lo = mid + 1;
+                continue;
+            }
 
             if (cmp < 0)
                 hi = mid - 1;

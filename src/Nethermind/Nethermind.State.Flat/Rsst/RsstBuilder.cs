@@ -29,7 +29,7 @@ public ref struct RsstBuilder
     private int _entryCount;
 
     // Previous key buffer for streaming separator computation
-    private readonly byte[] _prevKeyBuffer;
+    private byte[] _prevKeyBuffer;
     private int _prevKeyLength;
 
     public readonly struct RsstEntry(int sepOffset, int sepLen, int valueLengthOffset)
@@ -71,7 +71,8 @@ public ref struct RsstBuilder
     /// </summary>
     public Span<byte> BeginValueWrite(int maxSize)
     {
-        return _output.Slice(_position, maxSize);
+        int available = _output.Length - _position;
+        return _output.Slice(_position, Math.Min(maxSize, available));
     }
 
     /// <summary>
@@ -85,7 +86,7 @@ public ref struct RsstBuilder
 
         // Compute separator eagerly (only need prevKey, currKey - no nextKey in streaming)
         int sepLen = ComputeSeparatorLength(
-            _prevKeyBuffer[.._prevKeyLength],
+            _prevKeyBuffer.AsSpan(0, _prevKeyLength),
             key,
             nextKey: default);
 
@@ -93,7 +94,7 @@ public ref struct RsstBuilder
         if (_separatorBufferPos + sepLen > _separatorBuffer.Length)
             throw new InvalidOperationException("Separator buffer overflow");
 
-        key[..sepLen].CopyTo(_separatorBuffer[_separatorBufferPos..]);
+        key[..sepLen].CopyTo(_separatorBuffer.AsSpan(_separatorBufferPos));
         int sepOffset = _separatorBufferPos;
         _separatorBufferPos += sepLen;
 
@@ -126,11 +127,14 @@ public ref struct RsstBuilder
         // Update position past metadata
         _position = pos;
 
-        // Update prevKey for next entry
-        if (_prevKeyLength < key.Length && key.Length > _prevKeyBuffer.Length)
-            throw new InvalidOperationException("Previous key buffer too small");
+        // Update prevKey for next entry — grow buffer if needed
+        if (key.Length > _prevKeyBuffer.Length)
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(_prevKeyBuffer);
+            _prevKeyBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(key.Length);
+        }
 
-        key.CopyTo(_prevKeyBuffer);
+        key.CopyTo(_prevKeyBuffer.AsSpan());
         _prevKeyLength = key.Length;
     }
 
