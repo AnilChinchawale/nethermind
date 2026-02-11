@@ -157,7 +157,7 @@ public class SnapshotCompactor : ISnapshotCompactor
             }
         }));
 
-        // Slots and Selfdestruct
+        // Slots, Storage tries, and Selfdestruct
         compactTask.Add(Task.Run(() =>
         {
             for (int i = 0; i < snapshots.Count; i++)
@@ -183,7 +183,6 @@ public class SnapshotCompactor : ISnapshotCompactor
 
                 if (addressToClear.Count > 0)
                 {
-                    // Clear
                     foreach (((AddressAsKey Address, UInt256) key, SlotValue? _) in storages)
                     {
                         if (addressToClear.Contains(key.Address))
@@ -191,9 +190,18 @@ public class SnapshotCompactor : ISnapshotCompactor
                             storages.Remove(key, out _);
                         }
                     }
+
+                    foreach (((Hash256AsKey addr, TreePath) key, TrieNode _) in storageNodes)
+                    {
+                        if (addressHashToClear.Contains(key.addr))
+                        {
+                            storageNodes.Remove(key, out _);
+                        }
+                    }
                 }
 
                 storages.AddOrUpdateRange(knownState.Storages);
+                storageNodes.AddOrUpdateRange(knownState.StorageNodes);
             }
         }));
 
@@ -204,18 +212,6 @@ public class SnapshotCompactor : ISnapshotCompactor
             {
                 Snapshot knownState = snapshots[i];
                 stateNodes.AddOrUpdateRange(knownState.StateNodes);
-            }
-        }));
-
-        // Storage tries
-        compactTask.Add(Task.Run(() =>
-        {
-            for (int i = 0; i < snapshots.Count; i++)
-            {
-                // Its fine to not check for selfdestruct here. The trie is traversed so it will skip orphaned node.
-                // plus selfdestruct does not work anymore.
-                Snapshot knownState = snapshots[i];
-                storageNodes.AddOrUpdateRange(knownState.StorageNodes);
             }
         }));
 
