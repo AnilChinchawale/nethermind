@@ -151,7 +151,7 @@ public ref struct RsstBuilder
     /// <summary>
     /// Build index and trailer, returning final end position.
     /// </summary>
-    public int Build()
+    public int Build(int maxLeafEntries = Rsst.MaxLeafEntries)
     {
         if (_entryCount == 0)
         {
@@ -165,7 +165,7 @@ public ref struct RsstBuilder
         int indexStart = dataRegionEnd;
 
         // Build leaf nodes bottom-up using stackalloc for current level
-        int maxLevelSize = (_entryCount + Rsst.MaxLeafEntries - 1) / Rsst.MaxLeafEntries;
+        int maxLevelSize = (_entryCount + maxLeafEntries - 1) / maxLeafEntries;
         Span<NodeInfo> currentLevel = stackalloc NodeInfo[maxLevelSize];
         Span<NodeInfo> nextLevel = stackalloc NodeInfo[maxLevelSize];  // Allocate outside loop
         int currentLevelCount = 0;
@@ -173,7 +173,7 @@ public ref struct RsstBuilder
         int entryIdx = 0;
         while (entryIdx < _entryCount)
         {
-            int count = Math.Min(Rsst.MaxLeafEntries, _entryCount - entryIdx);
+            int count = Math.Min(maxLeafEntries, _entryCount - entryIdx);
             RsstEntry first = _entriesBuffer[entryIdx];
             RsstEntry last = _entriesBuffer[entryIdx + count - 1];
 
@@ -200,7 +200,7 @@ public ref struct RsstBuilder
             int childIdx = 0;
             while (childIdx < currentLevelCount)
             {
-                int childCount = Math.Min(Rsst.MaxLeafEntries, currentLevelCount - childIdx);
+                int childCount = Math.Min(maxLeafEntries, currentLevelCount - childIdx);
                 NodeInfo first = currentLevel[childIdx];
                 NodeInfo last = currentLevel[childIdx + childCount - 1];
 
@@ -606,7 +606,7 @@ public ref struct RsstBuilder
         }
 
         if (right.Length > minLen)
-            return minLen + 1;
+            return right.Length;
 
         return right.Length;
     }

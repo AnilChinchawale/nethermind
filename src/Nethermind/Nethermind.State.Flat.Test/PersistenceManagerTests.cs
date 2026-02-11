@@ -97,7 +97,7 @@ public class PersistenceManagerTests
         return snapshot;
     }
 
-[Test]
+    [Test]
     public void DetermineSnapshotAction_InsufficientInMemoryDepth_ReturnsNull()
     {
         // Setup: persisted at Block0 (0), latest at 60, after persist would be < 64 minimum
@@ -139,7 +139,7 @@ public class PersistenceManagerTests
         toPersist.Dispose();
     }
 
-[Test]
+    [Test]
     public void DetermineSnapshotAction_UnfinalizedButBelowForceLimit_ReturnsNull()
     {
         // Setup: persisted at Block0, latest at 150, finalized at 10 (way behind)
@@ -179,7 +179,7 @@ public class PersistenceManagerTests
         foreach (Snapshot s in toConvert) s.Dispose();
     }
 
-[Test]
+    [Test]
     public void DetermineSnapshotAction_NoSnapshotAvailable_ReturnsNull()
     {
         // Setup: sufficient depth but no snapshots in repository
@@ -271,7 +271,7 @@ public class PersistenceManagerTests
         toPersist!.Dispose();
     }
 
-[Test]
+    [Test]
     public void PersistSnapshot_WithAccountsStorageAndTrieNodes_WritesToBatch()
     {
         // Arrange
@@ -343,7 +343,7 @@ public class PersistenceManagerTests
         _persistence.Received(1).CreateWriteBatch(from, to);
     }
 
-[Test]
+    [Test]
     public void AddToPersistence_WithAvailableSnapshot_PersistsAndUpdatesState()
     {
         // Arrange
@@ -371,7 +371,7 @@ public class PersistenceManagerTests
         Assert.That(_persistenceManager.GetCurrentPersistedStateId(), Is.EqualTo(to));
     }
 
-[Test]
+    [Test]
     public void FlushToPersistence_NoSnapshots_ReturnsCurrentPersistedState()
     {
         // Arrange - no snapshots added
@@ -485,7 +485,7 @@ public class PersistenceManagerTests
         });
     }
 
-private class TestFinalizedStateProvider : IFinalizedStateProvider
+    private class TestFinalizedStateProvider : IFinalizedStateProvider
     {
         private long _finalizedBlockNumber;
         private readonly Dictionary<long, Hash256> _finalizedStateRoots = new();
