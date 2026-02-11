@@ -370,6 +370,7 @@ public class PersistenceManager(
     /// <summary>
     /// Merge two columnar RSST snapshots by merging each column's inner RSST independently.
     /// Newer entries override older ones when keys match within each column.
+    /// Nested columns (Storage, StorageNodes) merge inner RSSTs for matching address keys.
     /// </summary>
     internal static byte[] MergeSnapshotData(ReadOnlyMemory<byte> olderData, ReadOnlyMemory<byte> newerData)
     {
@@ -401,13 +402,16 @@ public class PersistenceManager(
                     bool hasOlder = olderOuter.TryGet(tagKey, out ReadOnlySpan<byte> olderColumn);
                     bool hasNewer = newerOuter.TryGet(tagKey, out ReadOnlySpan<byte> newerColumn);
 
+                    bool isNested = tag == PersistedSnapshot.StorageTag || tag == PersistedSnapshot.StorageNodeTag;
                     int maxColumnSize = Math.Max(olderColumn.Length, newerColumn.Length) + 1024;
                     Span<byte> valueSpan = outerBuilder.BeginValueWrite(maxColumnSize);
                     int columnLen;
 
                     if (hasOlder && hasNewer)
                     {
-                        columnLen = Rsst.RsstBuilder.StreamingMerge(olderColumn, newerColumn, columnBuffer, 0);
+                        columnLen = isNested
+                            ? NestedStreamingMerge(olderColumn, newerColumn, columnBuffer)
+                            : Rsst.RsstBuilder.StreamingMerge(olderColumn, newerColumn, columnBuffer, 0);
                         columnBuffer.AsSpan(0, columnLen).CopyTo(valueSpan);
                     }
                     else if (hasNewer)
@@ -441,6 +445,80 @@ public class PersistenceManager(
         finally
         {
             System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    /// <summary>
+    /// Merge two address-grouped RSSTs where values are inner RSSTs.
+    /// For matching address keys, the inner RSSTs are merged via StreamingMerge.
+    /// For non-matching keys, inner RSSTs are copied as-is.
+    /// </summary>
+    internal static int NestedStreamingMerge(ReadOnlySpan<byte> older, ReadOnlySpan<byte> newer, Span<byte> output)
+    {
+        Rsst.Rsst olderRsst = new(older);
+        Rsst.Rsst newerRsst = new(newer);
+
+        if (olderRsst.EntryCount == 0 && newerRsst.EntryCount == 0)
+        {
+            output[0] = 0x00;
+            output[1] = 0x01;
+            return 2;
+        }
+
+        byte[] innerMergeBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(older.Length + newer.Length);
+        try
+        {
+            using Rsst.RsstBuilder builder = new(output);
+            using Rsst.Rsst.Enumerator olderEnum = olderRsst.GetEnumerator();
+            using Rsst.Rsst.Enumerator newerEnum = newerRsst.GetEnumerator();
+
+            bool hasOlder = olderEnum.MoveNext();
+            bool hasNewer = newerEnum.MoveNext();
+
+            while (hasOlder && hasNewer)
+            {
+                ReadOnlySpan<byte> olderKey = olderEnum.Current.Key;
+                ReadOnlySpan<byte> newerKey = newerEnum.Current.Key;
+
+                int cmp = olderKey.SequenceCompareTo(newerKey);
+                if (cmp < 0)
+                {
+                    builder.Add(olderKey, olderEnum.Current.Value);
+                    hasOlder = olderEnum.MoveNext();
+                }
+                else if (cmp > 0)
+                {
+                    builder.Add(newerKey, newerEnum.Current.Value);
+                    hasNewer = newerEnum.MoveNext();
+                }
+                else
+                {
+                    // Matching address key: merge the inner RSSTs
+                    int mergedLen = Rsst.RsstBuilder.StreamingMerge(
+                        olderEnum.Current.Value, newerEnum.Current.Value, innerMergeBuffer, 0);
+                    builder.Add(newerKey, innerMergeBuffer.AsSpan(0, mergedLen));
+                    hasOlder = olderEnum.MoveNext();
+                    hasNewer = newerEnum.MoveNext();
+                }
+            }
+
+            while (hasOlder)
+            {
+                builder.Add(olderEnum.Current.Key, olderEnum.Current.Value);
+                hasOlder = olderEnum.MoveNext();
+            }
+
+            while (hasNewer)
+            {
+                builder.Add(newerEnum.Current.Key, newerEnum.Current.Value);
+                hasNewer = newerEnum.MoveNext();
+            }
+
+            return builder.Build();
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(innerMergeBuffer);
         }
     }
 }

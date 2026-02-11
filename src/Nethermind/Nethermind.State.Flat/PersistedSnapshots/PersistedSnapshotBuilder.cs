@@ -106,7 +106,7 @@ public static class PersistedSnapshotBuilder
 
     private static void WriteStorageColumn(ref RsstBuilder outer, Snapshot snapshot, Span<byte> fullOutput)
     {
-        // Sort storage
+        // Sort storage by (Address, Slot)
         List<((AddressAsKey Addr, UInt256 Slot) Key, SlotValue? Value)> storages = new();
         foreach (KeyValuePair<(AddressAsKey, UInt256), SlotValue?> kv in snapshot.Storages)
         {
@@ -119,30 +119,42 @@ public static class PersistedSnapshotBuilder
             return a.Key.Slot.CompareTo(b.Key.Slot);
         });
 
+        // Address-level RSST: Address(20) → inner RSST(Slot(32) → SlotValue)
         Span<byte> valueSpan = outer.BeginValueWrite(fullOutput.Length);
-        using (RsstBuilder inner = new(valueSpan))
+        using (RsstBuilder addressLevel = new(valueSpan))
         {
-            byte[] keyBuffer = new byte[Address.Size + 32];
-
-            foreach (((AddressAsKey addr, UInt256 slotIdx) key, SlotValue? value) in storages)
+            byte[] slotKey = new byte[32];
+            int i = 0;
+            while (i < storages.Count)
             {
-                key.addr.Value.Bytes.CopyTo(keyBuffer.AsSpan());
-                key.slotIdx.ToBigEndian(keyBuffer.AsSpan(Address.Size, 32));
+                Address currentAddr = storages[i].Key.Addr;
+                Span<byte> innerSpan = addressLevel.BeginValueWrite(fullOutput.Length);
+                using RsstBuilder inner = new(innerSpan);
 
-                if (value.HasValue)
+                while (i < storages.Count && storages[i].Key.Addr == currentAddr)
                 {
-                    ReadOnlySpan<byte> withoutLeadingZeros = value.Value.AsReadOnlySpan.WithoutLeadingZeros();
-                    inner.Add(keyBuffer.AsSpan(0, Address.Size + 32), withoutLeadingZeros);
+                    ((AddressAsKey _, UInt256 slotIdx) key, SlotValue? value) = storages[i];
+                    key.slotIdx.ToBigEndian(slotKey.AsSpan());
+
+                    if (value.HasValue)
+                    {
+                        ReadOnlySpan<byte> withoutLeadingZeros = value.Value.AsReadOnlySpan.WithoutLeadingZeros();
+                        inner.Add(slotKey, withoutLeadingZeros);
+                    }
+                    else
+                    {
+                        inner.Add(slotKey, ReadOnlySpan<byte>.Empty);
+                    }
+                    i++;
                 }
-                else
-                {
-                    inner.Add(keyBuffer.AsSpan(0, Address.Size + 32), ReadOnlySpan<byte>.Empty);
-                }
+
+                int innerLen = inner.Build();
+                addressLevel.FinishValueWrite(innerLen, currentAddr.Bytes);
             }
 
-            int innerLen = inner.Build();
+            int addrLen = addressLevel.Build();
             ReadOnlySpan<byte> storageTag = new byte[] { PersistedSnapshot.StorageTag };
-            outer.FinishValueWrite(innerLen, storageTag);
+            outer.FinishValueWrite(addrLen, storageTag);
         }
     }
 
@@ -206,7 +218,7 @@ public static class PersistedSnapshotBuilder
 
     private static void WriteStorageNodesColumn(ref RsstBuilder outer, Snapshot snapshot, Span<byte> fullOutput)
     {
-        // Sort storage nodes
+        // Sort storage nodes by (Hash256, TreePath, Length)
         List<((Hash256AsKey Addr, TreePath Path) Key, TrieNode Node)> storageNodes = new();
         foreach (KeyValuePair<(Hash256AsKey, TreePath), TrieNode> kv in snapshot.StorageNodes)
         {
@@ -222,21 +234,34 @@ public static class PersistedSnapshotBuilder
             return a.Key.Path.Length.CompareTo(b.Key.Path.Length);
         });
 
+        // Hash-level RSST: Hash256(32) → inner RSST(TreePath(33) → NodeRLP)
         Span<byte> valueSpan = outer.BeginValueWrite(fullOutput.Length);
-        using (RsstBuilder inner = new(valueSpan))
+        using (RsstBuilder hashLevel = new(valueSpan))
         {
-            byte[] keyBuffer = new byte[32 + 32 + 1];
-            foreach (((Hash256AsKey addr, TreePath path) snKey, TrieNode node) in storageNodes)
+            byte[] pathKey = new byte[33];
+            int i = 0;
+            while (i < storageNodes.Count)
             {
-                snKey.addr.Value.Bytes.CopyTo(keyBuffer.AsSpan());
-                snKey.path.Path.Bytes.CopyTo(keyBuffer.AsSpan(32));
-                keyBuffer[64] = (byte)snKey.path.Length;
-                inner.Add(keyBuffer.AsSpan(0, 65), node.FullRlp.Span);
+                Hash256 currentHash = storageNodes[i].Key.Addr;
+                Span<byte> innerSpan = hashLevel.BeginValueWrite(fullOutput.Length);
+                using RsstBuilder inner = new(innerSpan);
+
+                while (i < storageNodes.Count && storageNodes[i].Key.Addr.Equals(currentHash))
+                {
+                    ((Hash256AsKey _, TreePath path) snKey, TrieNode node) = storageNodes[i];
+                    snKey.path.Path.Bytes.CopyTo(pathKey.AsSpan());
+                    pathKey[32] = (byte)snKey.path.Length;
+                    inner.Add(pathKey.AsSpan(0, 33), node.FullRlp.Span);
+                    i++;
+                }
+
+                int innerLen = inner.Build();
+                hashLevel.FinishValueWrite(innerLen, currentHash.Bytes);
             }
 
-            int innerLen = inner.Build();
+            int hashLen = hashLevel.Build();
             ReadOnlySpan<byte> storageNodeTag = new byte[] { PersistedSnapshot.StorageNodeTag };
-            outer.FinishValueWrite(innerLen, storageNodeTag);
+            outer.FinishValueWrite(hashLen, storageNodeTag);
         }
     }
 }

@@ -56,10 +56,9 @@ public sealed class PersistedSnapshot : RefCountingDisposable
 
     public byte[]? TryGetSlot(Address address, in UInt256 index)
     {
-        Span<byte> key = stackalloc byte[Address.Size + 32];
-        address.Bytes.CopyTo(key);
-        index.ToBigEndian(key[Address.Size..]);
-        return TryGetFromColumn(StorageTag, key);
+        Span<byte> slotKey = stackalloc byte[32];
+        index.ToBigEndian(slotKey);
+        return TryGetNestedValue(StorageTag, address.Bytes, slotKey);
     }
 
     public bool IsSelfDestructed(Address address) =>
@@ -87,11 +86,10 @@ public sealed class PersistedSnapshot : RefCountingDisposable
 
     public byte[]? TryLoadStorageNodeRlp(Hash256 address, in TreePath path)
     {
-        Span<byte> key = stackalloc byte[32 + 32 + 1];
-        address.Bytes.CopyTo(key);
-        path.Path.Bytes.CopyTo(key[32..]);
-        key[64] = (byte)path.Length;
-        return TryGetFromColumn(StorageNodeTag, key);
+        Span<byte> pathKey = stackalloc byte[33];
+        path.Path.Bytes.CopyTo(pathKey);
+        pathKey[32] = (byte)path.Length;
+        return TryGetNestedValue(StorageNodeTag, address.Bytes, pathKey);
     }
 
     private byte[]? TryGetFromColumn(byte tag, ReadOnlySpan<byte> entityKey)
@@ -103,6 +101,20 @@ public sealed class PersistedSnapshot : RefCountingDisposable
             return null;
 
         Rsst.Rsst inner = new(columnData);
+        return inner.TryGet(entityKey, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
+    }
+
+    private byte[]? TryGetNestedValue(byte tag, ReadOnlySpan<byte> addressKey, ReadOnlySpan<byte> entityKey)
+    {
+        Rsst.Rsst outer = new(_data.Span);
+        Span<byte> tagSpan = stackalloc byte[1];
+        tagSpan[0] = tag;
+        if (!outer.TryGet(tagSpan, out ReadOnlySpan<byte> columnData)) return null;
+
+        Rsst.Rsst addressLevel = new(columnData);
+        if (!addressLevel.TryGet(addressKey, out ReadOnlySpan<byte> innerData)) return null;
+
+        Rsst.Rsst inner = new(innerData);
         return inner.TryGet(entityKey, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
     }
 

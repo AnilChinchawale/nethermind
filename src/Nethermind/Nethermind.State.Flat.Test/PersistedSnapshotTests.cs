@@ -91,21 +91,15 @@ public class PersistedSnapshotTests
         Rsst.Rsst outerRsst = new(data);
         Assert.That(outerRsst.EntryCount, Is.EqualTo(5), "Outer RSST should have 5 column entries");
 
-        // Verify the storage column inner RSST has 1 entry
+        // Verify nested structure: storage column → address-level RSST → inner RSST
         Assert.That(outerRsst.TryGet([PersistedSnapshot.StorageTag], out ReadOnlySpan<byte> storageColumn), Is.True);
-        Rsst.Rsst innerRsst = new(storageColumn);
-        Assert.That(innerRsst.EntryCount, Is.EqualTo(1), "Storage inner RSST should have 1 entry");
+        Rsst.Rsst addressRsst = new(storageColumn);
+        Assert.That(addressRsst.EntryCount, Is.EqualTo(1), "Address-level RSST should have 1 address entry");
 
-        // Build entity key (address + slot, without tag prefix)
-        byte[] entityKey = new byte[Address.Size + 32];
-        addr.Bytes.CopyTo(entityKey.AsSpan());
-        slot.ToBigEndian(entityKey.AsSpan(Address.Size));
-
-        // Verify inner RSST key matches entity key
-        foreach (Rsst.Rsst.KeyValueEntry entry in innerRsst)
-        {
-            Assert.That(entry.Key.ToArray(), Is.EqualTo(entityKey));
-        }
+        // Verify address key and inner slot entry
+        Assert.That(addressRsst.TryGet(addr.Bytes, out ReadOnlySpan<byte> innerData), Is.True);
+        Rsst.Rsst innerRsst = new(innerData);
+        Assert.That(innerRsst.EntryCount, Is.EqualTo(1), "Inner RSST should have 1 slot entry");
 
         PersistedSnapshot persisted = new(1, from, to, PersistedSnapshotType.Base, data);
         byte[]? slotBytes = persisted.TryGetSlot(addr, slot);
@@ -175,10 +169,109 @@ public class PersistedSnapshotTests
         Snapshot snapshot = new(from, to, content, _resourcePool, ResourcePool.Usage.MainBlockProcessing);
         byte[] data = PersistedSnapshotBuilder.Build(snapshot);
 
+        // Verify nested structure
+        Rsst.Rsst outerRsst = new(data);
+        Assert.That(outerRsst.TryGet([PersistedSnapshot.StorageNodeTag], out ReadOnlySpan<byte> snColumn), Is.True);
+        Rsst.Rsst hashRsst = new(snColumn);
+        Assert.That(hashRsst.EntryCount, Is.EqualTo(1), "Hash-level RSST should have 1 entry");
+        Assert.That(hashRsst.TryGet(address.Bytes, out ReadOnlySpan<byte> innerData), Is.True);
+        Rsst.Rsst innerRsst = new(innerData);
+        Assert.That(innerRsst.EntryCount, Is.EqualTo(1), "Inner RSST should have 1 path entry");
+
         PersistedSnapshot persisted = new(1, from, to, PersistedSnapshotType.Base, data);
         byte[]? loadedRlp = persisted.TryLoadStorageNodeRlp(address, path);
         Assert.That(loadedRlp, Is.Not.Null);
         Assert.That(loadedRlp, Is.EqualTo(nodeRlp));
+    }
+
+    [Test]
+    public void Storage_MultipleAddresses_GroupedCorrectly()
+    {
+        StateId from = new(0, Keccak.EmptyTreeHash);
+        StateId to = new(1, Keccak.Compute("1"));
+
+        Address addrA = TestItem.AddressA;
+        Address addrB = TestItem.AddressB;
+        byte[] val1 = new byte[32]; val1[31] = 0x01;
+        byte[] val2 = new byte[32]; val2[31] = 0x02;
+        byte[] val3 = new byte[32]; val3[31] = 0x03;
+
+        Snapshot snapshot = CreateTestSnapshot(from, to, storages:
+        [
+            (addrA, (UInt256)1, val1),
+            (addrA, (UInt256)2, val2),
+            (addrB, (UInt256)5, val3)
+        ]);
+        byte[] data = PersistedSnapshotBuilder.Build(snapshot);
+
+        // Verify grouping: address-level RSST should have 2 entries
+        Rsst.Rsst outerRsst = new(data);
+        Assert.That(outerRsst.TryGet([PersistedSnapshot.StorageTag], out ReadOnlySpan<byte> storageColumn), Is.True);
+        Rsst.Rsst addressRsst = new(storageColumn);
+        Assert.That(addressRsst.EntryCount, Is.EqualTo(2), "Address-level RSST should have 2 address entries");
+
+        // Verify inner slot counts
+        Assert.That(addressRsst.TryGet(addrA.Bytes, out ReadOnlySpan<byte> innerA), Is.True);
+        Assert.That(new Rsst.Rsst(innerA).EntryCount, Is.EqualTo(2), "AddressA inner RSST should have 2 slots");
+
+        Assert.That(addressRsst.TryGet(addrB.Bytes, out ReadOnlySpan<byte> innerB), Is.True);
+        Assert.That(new Rsst.Rsst(innerB).EntryCount, Is.EqualTo(1), "AddressB inner RSST should have 1 slot");
+
+        // Verify round-trip reads
+        PersistedSnapshot persisted = new(1, from, to, PersistedSnapshotType.Base, data);
+        Assert.That(persisted.TryGetSlot(addrA, (UInt256)1), Is.Not.Null);
+        Assert.That(persisted.TryGetSlot(addrA, (UInt256)2), Is.Not.Null);
+        Assert.That(persisted.TryGetSlot(addrB, (UInt256)5), Is.Not.Null);
+        Assert.That(persisted.TryGetSlot(addrA, (UInt256)5), Is.Null);
+        Assert.That(persisted.TryGetSlot(addrB, (UInt256)1), Is.Null);
+    }
+
+    [Test]
+    public void Storage_NestedMerge_OverlappingAddresses()
+    {
+        StateId s0 = new(0, Keccak.EmptyTreeHash);
+        StateId s1 = new(1, Keccak.Compute("1"));
+        StateId s2 = new(2, Keccak.Compute("2"));
+
+        Address addrA = TestItem.AddressA;
+        Address addrB = TestItem.AddressB;
+        byte[] val1 = new byte[32]; val1[31] = 0x01;
+        byte[] val2 = new byte[32]; val2[31] = 0x02;
+        byte[] val3 = new byte[32]; val3[31] = 0x03;
+
+        // Older: addrA slot 1 = val1, addrB slot 5 = val2
+        Snapshot snap1 = CreateTestSnapshot(s0, s1, storages:
+        [
+            (addrA, (UInt256)1, val1),
+            (addrB, (UInt256)5, val2)
+        ]);
+        byte[] data1 = PersistedSnapshotBuilder.Build(snap1);
+
+        // Newer: addrA slot 1 = val3 (override), addrA slot 2 = val2 (new)
+        Snapshot snap2 = CreateTestSnapshot(s1, s2, storages:
+        [
+            (addrA, (UInt256)1, val3),
+            (addrA, (UInt256)2, val2)
+        ]);
+        byte[] data2 = PersistedSnapshotBuilder.Build(snap2);
+
+        byte[] merged = PersistenceManager.MergeSnapshotData(data1, data2);
+        PersistedSnapshot persisted = new(1, s0, s2, PersistedSnapshotType.Base, merged);
+
+        // addrA slot 1 should be overridden to val3
+        byte[]? slot1 = persisted.TryGetSlot(addrA, (UInt256)1);
+        Assert.That(slot1, Is.Not.Null);
+        Assert.That(slot1![0], Is.EqualTo(0x03));
+
+        // addrA slot 2 should be val2 (from newer)
+        byte[]? slot2 = persisted.TryGetSlot(addrA, (UInt256)2);
+        Assert.That(slot2, Is.Not.Null);
+        Assert.That(slot2![0], Is.EqualTo(0x02));
+
+        // addrB slot 5 should be val2 (from older, carried through)
+        byte[]? slot5 = persisted.TryGetSlot(addrB, (UInt256)5);
+        Assert.That(slot5, Is.Not.Null);
+        Assert.That(slot5![0], Is.EqualTo(0x02));
     }
 
     [Test]
