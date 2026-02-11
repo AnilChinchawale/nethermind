@@ -84,7 +84,7 @@ public class LongFinalityIntegrationTests
         });
 
         repo.PersistSnapshot(snap);
-        using PersistedSnapshotList list = repo.CompileSnapshotList();
+        using PersistedSnapshotList list = repo.AssembleSnapshots(s1, s0);
         Assert.That(list.Count, Is.EqualTo(1));
 
         // Query all types through the individual persisted snapshot
@@ -128,7 +128,7 @@ public class LongFinalityIntegrationTests
             repo.LoadFromCatalog();
             Assert.That(repo.SnapshotCount, Is.EqualTo(2));
 
-            using PersistedSnapshotList list = repo.CompileSnapshotList();
+            using PersistedSnapshotList list = repo.AssembleSnapshots(s2, s0);
             byte[]? r1 = null, r2 = null;
             for (int i = list.Count - 1; i >= 0; i--)
             {
@@ -231,7 +231,7 @@ public class LongFinalityIntegrationTests
 
         Assert.That(repo.SnapshotCount, Is.EqualTo(snapshotCount));
 
-        using PersistedSnapshotList list = repo.CompileSnapshotList();
+        using PersistedSnapshotList list = repo.AssembleSnapshots(prev, new StateId(0, Keccak.EmptyTreeHash));
         Assert.That(list.Count, Is.EqualTo(snapshotCount));
     }
 
@@ -280,12 +280,12 @@ public class LongFinalityIntegrationTests
         repo.PersistSnapshot(CreateSnapshot(s0, s1, c =>
             c.StateNodes[path] = new TrieNode(NodeType.Leaf, nodeRlp)));
 
-        // Set up persistence reader at s1
+        // Set up persistence reader at s0 — persisted snapshot fills gap s0→s1
         IPersistenceManager persistenceManager = Substitute.For<IPersistenceManager>();
         IPersistence.IPersistenceReader reader = Substitute.For<IPersistence.IPersistenceReader>();
-        reader.CurrentState.Returns(s1);
+        reader.CurrentState.Returns(s0);
         persistenceManager.LeaseReader().Returns(reader);
-        persistenceManager.GetCurrentPersistedStateId().Returns(s1);
+        persistenceManager.GetCurrentPersistedStateId().Returns(s0);
 
         ISnapshotRepository snapshotRepo = Substitute.For<ISnapshotRepository>();
         snapshotRepo.AssembleSnapshots(Arg.Any<StateId>(), Arg.Any<StateId>(), Arg.Any<int>())

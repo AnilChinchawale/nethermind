@@ -129,7 +129,7 @@ public class PersistenceManagerPersistedTests
 
         Assert.That(repo.SnapshotCount, Is.EqualTo(1));
 
-        using PersistedSnapshotList list = repo.CompileSnapshotList();
+        using PersistedSnapshotList list = repo.AssembleSnapshots(s1, s0);
         Assert.That(list.Count, Is.EqualTo(1));
     }
 

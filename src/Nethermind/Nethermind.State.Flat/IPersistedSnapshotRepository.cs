@@ -17,5 +17,4 @@ public interface IPersistedSnapshotRepository : IDisposable
 
     // Lifecycle
     int PruneBefore(StateId stateId);
-    PersistedSnapshotList CompileSnapshotList();
 }

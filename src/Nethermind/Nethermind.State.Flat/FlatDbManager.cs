@@ -276,30 +276,47 @@ public class FlatDbManager : IFlatDbManager, IAsyncDisposable
             }
 
 
+            // Determine persisted snapshot list for any gap between persistence state and in-memory snapshots
+            PersistedSnapshotList persistedList;
             if (snapshots.Count == 0)
             {
-                if (persistenceReader.CurrentState != baseBlock)
+                if (persistenceReader.CurrentState == baseBlock)
                 {
-                    persistenceReader.Dispose();
-                    throw new InvalidOperationException($"Unable to gather snapshots for state {baseBlock}.");
+                    persistedList = PersistedSnapshotList.Empty;
+                }
+                else
+                {
+                    persistedList = _persistedSnapshotRepository.AssembleSnapshots(baseBlock, persistenceReader.CurrentState);
+                    if (persistedList.Count == 0)
+                    {
+                        persistenceReader.Dispose();
+                        throw new InvalidOperationException($"Unable to gather snapshots for state {baseBlock}.");
+                    }
                 }
             }
             else
             {
-                if (snapshots[0].From != persistenceReader.CurrentState)
+                if (snapshots[0].From == persistenceReader.CurrentState)
                 {
-                    // Cannot assemble snapshot that reaches the persisted state snapshot. It could be that the snapshots was removed
-                    // concurrently. We will retry.
-                    snapshots.Dispose();
-                    persistenceReader.Dispose();
-                    attempt++;
-                    continue;
+                    persistedList = PersistedSnapshotList.Empty;
+                }
+                else
+                {
+                    persistedList = _persistedSnapshotRepository.AssembleSnapshots(snapshots[0].From, persistenceReader.CurrentState);
+                    if (persistedList.Count == 0)
+                    {
+                        // Cannot assemble persisted snapshots to fill gap. It could be that the snapshots were removed
+                        // concurrently. We will retry.
+                        snapshots.Dispose();
+                        persistenceReader.Dispose();
+                        attempt++;
+                        continue;
+                    }
                 }
             }
 
-            if (_logger.IsTrace) _logger.Trace($"Gathered {baseBlock}. Got {snapshots.Count} known states, Reader state: {persistenceReader.CurrentState}. Persistence state: {_persistenceManager.GetCurrentPersistedStateId()}");
+            if (_logger.IsTrace) _logger.Trace($"Gathered {baseBlock}. Got {snapshots.Count} known states, {persistedList.Count} persisted, Reader state: {persistenceReader.CurrentState}. Persistence state: {_persistenceManager.GetCurrentPersistedStateId()}");
 
-            PersistedSnapshotList persistedList = _persistedSnapshotRepository.CompileSnapshotList();
             ReadOnlySnapshotBundle res = new(snapshots, persistenceReader, _enableDetailedMetrics, persistedList);
 
             res.TryLease();

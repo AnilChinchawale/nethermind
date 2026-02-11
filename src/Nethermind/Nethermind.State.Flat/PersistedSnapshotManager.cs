@@ -50,8 +50,7 @@ public class PersistedSnapshotManager(
         long startingBlockNumber = ((blockNumber - 1) / compactSize) * compactSize;
 
         // We need at least 2 snapshots to compact
-        using PersistedSnapshotList candidates = persistedSnapshotRepository.CompileSnapshotList();
-        if (candidates.Count < 2) return;
+        if (persistedSnapshotRepository.SnapshotCount < 2) return;
 
         // For now, delegate to the repository's compile + merge approach.
         // The actual merge uses StreamingMerge from RsstBuilder.

@@ -88,12 +88,12 @@ public class FlatDbManagerPersistedTests
         repo.LoadFromCatalog();
         repo.PersistSnapshot(snap);
 
-        // Mock persistence manager that returns s1 as current state
+        // Mock persistence manager at s0 — persisted snapshot fills gap s0→s1
         IPersistenceManager persistenceManager = Substitute.For<IPersistenceManager>();
         IPersistence.IPersistenceReader reader = Substitute.For<IPersistence.IPersistenceReader>();
-        reader.CurrentState.Returns(s1);
+        reader.CurrentState.Returns(s0);
         persistenceManager.LeaseReader().Returns(reader);
-        persistenceManager.GetCurrentPersistedStateId().Returns(s1);
+        persistenceManager.GetCurrentPersistedStateId().Returns(s0);
 
         // Mock snapshot repository that returns empty list (no in-memory snapshots)
         ISnapshotRepository snapshotRepo = Substitute.For<ISnapshotRepository>();

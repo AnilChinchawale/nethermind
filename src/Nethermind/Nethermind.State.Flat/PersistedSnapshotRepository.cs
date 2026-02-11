@@ -177,39 +177,6 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     }
 
     /// <summary>
-    /// Compile an ordered snapshot list for queries. Snapshots are ordered
-    /// oldest-first in the array; PersistedSnapshotList queries newest-first.
-    /// Acquires leases on all included snapshots.
-    /// </summary>
-    public PersistedSnapshotList CompileSnapshotList()
-    {
-        lock (_lock)
-        {
-            int total = _baseSnapshots.Count + _compactedSnapshots.Count;
-            if (total == 0) return PersistedSnapshotList.Empty;
-
-            List<PersistedSnapshot> ordered = new(total);
-            foreach (PersistedSnapshot snapshot in _baseSnapshots.Values)
-                ordered.Add(snapshot);
-            foreach (PersistedSnapshot snapshot in _compactedSnapshots.Values)
-                ordered.Add(snapshot);
-
-            ordered.Sort((a, b) => a.From.BlockNumber.CompareTo(b.From.BlockNumber));
-
-            List<PersistedSnapshot> leased = new(ordered.Count);
-            foreach (PersistedSnapshot snapshot in ordered)
-            {
-                if (snapshot.TryAcquire())
-                    leased.Add(snapshot);
-            }
-
-            return leased.Count == 0
-                ? PersistedSnapshotList.Empty
-                : new PersistedSnapshotList(leased.ToArray());
-        }
-    }
-
-    /// <summary>
     /// Prune snapshots with To.BlockNumber before the given state.
     /// </summary>
     public int PruneBefore(StateId stateId)

@@ -70,7 +70,7 @@ public class PersistedSnapshotRepositoryTests
     }
 
     [Test]
-    public void CompileSnapshotList_OrderedOldestFirst()
+    public void AssembleSnapshots_OrderedOldestFirst()
     {
         using PersistedSnapshotRepository repo = new(_testDir, maxArenaSize: 4096);
         repo.LoadFromCatalog();
@@ -95,7 +95,7 @@ public class PersistedSnapshotRepositoryTests
         repo.PersistSnapshot(snap1);
         repo.PersistSnapshot(snap2);
 
-        using PersistedSnapshotList list = repo.CompileSnapshotList();
+        using PersistedSnapshotList list = repo.AssembleSnapshots(s2, s0);
 
         // Should return newest value (rlp2) when queried newest-first
         byte[]? result = null;
@@ -127,7 +127,7 @@ public class PersistedSnapshotRepositoryTests
             repo.LoadFromCatalog();
             Assert.That(repo.SnapshotCount, Is.EqualTo(1));
 
-            using PersistedSnapshotList list = repo.CompileSnapshotList();
+            using PersistedSnapshotList list = repo.AssembleSnapshots(s1, s0);
             Assert.That(list.Count, Is.EqualTo(1));
         }
     }

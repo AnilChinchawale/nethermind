@@ -196,6 +196,7 @@ public class PersistenceManager(
                 using Snapshot _ = toPersist;
                 PersistSnapshot(toPersist);
                 _currentPersistedStateId = toPersist.To;
+                persistedSnapshotManager.PrunePersistedSnapshots(_currentPersistedStateId);
             }
             else if (toConvert is not null)
             {
@@ -204,6 +205,7 @@ public class PersistenceManager(
                     using Snapshot _ = snapshot;
                     persistedSnapshotManager.ConvertToPersistedSnapshot(snapshot);
                 }
+                snapshotRepository.RemoveStatesUntil(toConvert[^1].To);
                 break; // Don't loop — conversion is not persistence
             }
             else
@@ -265,6 +267,7 @@ public class PersistenceManager(
             currentPersistedState = _currentPersistedStateId;
         }
 
+        persistedSnapshotManager.PrunePersistedSnapshots(currentPersistedState);
         return currentPersistedState;
     }
 
