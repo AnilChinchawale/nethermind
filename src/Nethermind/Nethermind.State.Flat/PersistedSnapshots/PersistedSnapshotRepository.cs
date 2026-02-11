@@ -94,7 +94,7 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     /// <summary>
     /// Store a compacted snapshot (keyed by To StateId).
     /// </summary>
-    public PersistedSnapshot AddCompactedSnapshot(StateId from, StateId to, byte[] rsstData)
+    public PersistedSnapshot AddCompactedSnapshot(StateId from, StateId to, ReadOnlySpan<byte> rsstData)
     {
         lock (_lock)
         {
@@ -103,7 +103,7 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
             _catalog.Add(new SnapshotCatalog.CatalogEntry(id, from, to, PersistedSnapshotType.Compacted, location));
             _catalog.Save();
 
-            PersistedSnapshot persisted = new(id, from, to, PersistedSnapshotType.Compacted, (byte[])rsstData.Clone());
+            PersistedSnapshot persisted = new(id, from, to, PersistedSnapshotType.Compacted, rsstData.ToArray());
             _compactedSnapshots[to] = persisted;
             return persisted;
         }

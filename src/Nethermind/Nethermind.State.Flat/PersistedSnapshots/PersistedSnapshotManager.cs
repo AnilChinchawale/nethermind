@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using System.Buffers;
 using Nethermind.Core.Extensions;
 using Nethermind.Db;
 using Nethermind.Logging;
@@ -70,11 +71,26 @@ public class PersistedSnapshotManager(
 
         if (_logger.IsDebug) _logger.Debug($"Compacting {snapshots.Count} persisted snapshots at block {blockNumber}, compact size {compactSize}");
 
-        byte[] mergedData = MergeSnapshots(snapshots);
-
         StateId from = snapshots[0].From;
         StateId to = snapshots[snapshots.Count - 1].To;
-        persistedSnapshotRepository.AddCompactedSnapshot(from, to, mergedData);
+
+        int totalSize = 0;
+        for (int i = 0; i < snapshots.Count; i++) totalSize += snapshots[i].Data.Length;
+        totalSize += 4096;
+
+        byte[] bufA = ArrayPool<byte>.Shared.Rent(totalSize);
+        byte[] bufB = ArrayPool<byte>.Shared.Rent(totalSize);
+        try
+        {
+            int len = MergeSnapshots(snapshots, bufA, bufB, out bool resultInA);
+            ReadOnlySpan<byte> merged = (resultInA ? bufA : bufB).AsSpan(0, len);
+            persistedSnapshotRepository.AddCompactedSnapshot(from, to, merged);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(bufA);
+            ArrayPool<byte>.Shared.Return(bufB);
+        }
 
         Metrics.PersistedSnapshotCompactions++;
         Metrics.PersistedSnapshotCount = persistedSnapshotRepository.SnapshotCount;
@@ -103,12 +119,41 @@ public class PersistedSnapshotManager(
     internal static byte[] MergeSnapshots(PersistedSnapshotList snapshots)
     {
         if (snapshots.Count == 0) throw new ArgumentException("Cannot merge empty snapshot list");
-        byte[] merged = snapshots[0].Data.ToArray();
+        if (snapshots.Count == 1) return snapshots[0].Data.ToArray();
+
+        int totalSize = 0;
+        for (int i = 0; i < snapshots.Count; i++) totalSize += snapshots[i].Data.Length;
+        totalSize += 4096;
+
+        byte[] bufA = ArrayPool<byte>.Shared.Rent(totalSize);
+        byte[] bufB = ArrayPool<byte>.Shared.Rent(totalSize);
+        try
+        {
+            int len = MergeSnapshots(snapshots, bufA, bufB, out bool resultInA);
+            return (resultInA ? bufA : bufB).AsSpan(0, len).ToArray();
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(bufA);
+            ArrayPool<byte>.Shared.Return(bufB);
+        }
+    }
+
+    private static int MergeSnapshots(PersistedSnapshotList snapshots, Span<byte> bufferA, Span<byte> bufferB, out bool resultInA)
+    {
+        snapshots[0].Data.Span.CopyTo(bufferA);
+        int currentLen = snapshots[0].Data.Length;
+        resultInA = true;
+
         for (int i = 1; i < snapshots.Count; i++)
         {
-            merged = MergeTwoPersisted(merged, snapshots[i].Data);
+            ReadOnlySpan<byte> src = resultInA ? bufferA[..currentLen] : bufferB[..currentLen];
+            Span<byte> dst = resultInA ? bufferB : bufferA;
+            currentLen = MergeTwoPersisted(src, snapshots[i].Data.Span, dst);
+            resultInA = !resultInA;
         }
-        return merged;
+
+        return currentLen;
     }
 
     /// <summary>
@@ -117,13 +162,10 @@ public class PersistedSnapshotManager(
     ///   - Storage column: destructed addresses' older storage is discarded
     ///   - StorageNodes column: standard NestedStreamingMerge (orphaned nodes skipped during trie traversal)
     /// </summary>
-    private static byte[] MergeTwoPersisted(ReadOnlyMemory<byte> olderData, ReadOnlyMemory<byte> newerData)
+    private static int MergeTwoPersisted(ReadOnlySpan<byte> olderData, ReadOnlySpan<byte> newerData, Span<byte> output)
     {
-        ReadOnlySpan<byte> olderSpan = olderData.Span;
-        ReadOnlySpan<byte> newerSpan = newerData.Span;
-
-        Rsst.Rsst olderOuter = new(olderSpan);
-        Rsst.Rsst newerOuter = new(newerSpan);
+        Rsst.Rsst olderOuter = new(olderData);
+        Rsst.Rsst newerOuter = new(newerData);
 
         // Pre-extract destructed addresses from newer self-destruct column
         byte[] sdTagKey = [PersistedSnapshot.SelfDestructTag];
@@ -139,83 +181,74 @@ public class PersistedSnapshotManager(
             }
         }
 
-        byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(olderData.Length + newerData.Length + 4096);
+        using RsstBuilder outerBuilder = new(output);
+        ReadOnlySpan<byte> tags = [
+            PersistedSnapshot.AccountTag,
+            PersistedSnapshot.StorageTag,
+            PersistedSnapshot.SelfDestructTag,
+            PersistedSnapshot.StateNodeTag,
+            PersistedSnapshot.StorageNodeTag
+        ];
+
+        byte[] columnBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(olderData.Length, newerData.Length));
+        byte[] tagKey = new byte[1];
         try
         {
-            using RsstBuilder outerBuilder = new(buffer);
-            ReadOnlySpan<byte> tags = [
-                PersistedSnapshot.AccountTag,
-                PersistedSnapshot.StorageTag,
-                PersistedSnapshot.SelfDestructTag,
-                PersistedSnapshot.StateNodeTag,
-                PersistedSnapshot.StorageNodeTag
-            ];
-
-            byte[] columnBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(olderData.Length, newerData.Length));
-            byte[] tagKey = new byte[1];
-            try
+            foreach (byte tag in tags)
             {
-                foreach (byte tag in tags)
+                tagKey[0] = tag;
+                bool hasOlder = olderOuter.TryGet(tagKey, out ReadOnlySpan<byte> olderColumn);
+                bool hasNewer = newerOuter.TryGet(tagKey, out ReadOnlySpan<byte> newerColumn);
+
+                int maxColumnSize = Math.Max(olderColumn.Length, newerColumn.Length) + 1024;
+                Span<byte> valueSpan = outerBuilder.BeginValueWrite(maxColumnSize);
+                int columnLen;
+
+                if (hasOlder && hasNewer)
                 {
-                    tagKey[0] = tag;
-                    bool hasOlder = olderOuter.TryGet(tagKey, out ReadOnlySpan<byte> olderColumn);
-                    bool hasNewer = newerOuter.TryGet(tagKey, out ReadOnlySpan<byte> newerColumn);
-
-                    int maxColumnSize = Math.Max(olderColumn.Length, newerColumn.Length) + 1024;
-                    Span<byte> valueSpan = outerBuilder.BeginValueWrite(maxColumnSize);
-                    int columnLen;
-
-                    if (hasOlder && hasNewer)
+                    columnLen = tag switch
                     {
-                        columnLen = tag switch
-                        {
-                            PersistedSnapshot.StorageTag => NestedStreamingMergeWithSelfDestruct(olderColumn, newerColumn, columnBuffer, destructedAddresses),
-                            PersistedSnapshot.SelfDestructTag => SelfDestructMerge(olderColumn, newerColumn, columnBuffer),
-                            PersistedSnapshot.StorageNodeTag => NestedStreamingMerge(olderColumn, newerColumn, columnBuffer),
-                            _ => RsstBuilder.StreamingMerge(olderColumn, newerColumn, columnBuffer, 0),
-                        };
+                        PersistedSnapshot.StorageTag => NestedStreamingMergeWithSelfDestruct(olderColumn, newerColumn, columnBuffer, destructedAddresses),
+                        PersistedSnapshot.SelfDestructTag => SelfDestructMerge(olderColumn, newerColumn, columnBuffer),
+                        PersistedSnapshot.StorageNodeTag => NestedStreamingMerge(olderColumn, newerColumn, columnBuffer),
+                        _ => RsstBuilder.StreamingMerge(olderColumn, newerColumn, columnBuffer, 0),
+                    };
+                    columnBuffer.AsSpan(0, columnLen).CopyTo(valueSpan);
+                }
+                else if (hasNewer)
+                {
+                    columnLen = newerColumn.Length;
+                    newerColumn.CopyTo(valueSpan);
+                }
+                else if (hasOlder)
+                {
+                    if (tag == PersistedSnapshot.StorageTag && destructedAddresses.Count > 0)
+                    {
+                        columnLen = FilterDestructedFromNested(olderColumn, columnBuffer, destructedAddresses);
                         columnBuffer.AsSpan(0, columnLen).CopyTo(valueSpan);
-                    }
-                    else if (hasNewer)
-                    {
-                        columnLen = newerColumn.Length;
-                        newerColumn.CopyTo(valueSpan);
-                    }
-                    else if (hasOlder)
-                    {
-                        if (tag == PersistedSnapshot.StorageTag && destructedAddresses.Count > 0)
-                        {
-                            columnLen = FilterDestructedFromNested(olderColumn, columnBuffer, destructedAddresses);
-                            columnBuffer.AsSpan(0, columnLen).CopyTo(valueSpan);
-                        }
-                        else
-                        {
-                            columnLen = olderColumn.Length;
-                            olderColumn.CopyTo(valueSpan);
-                        }
                     }
                     else
                     {
-                        valueSpan[0] = 0x00;
-                        valueSpan[1] = 0x01;
-                        columnLen = 2;
+                        columnLen = olderColumn.Length;
+                        olderColumn.CopyTo(valueSpan);
                     }
-
-                    outerBuilder.FinishValueWrite(columnLen, tagKey);
                 }
-            }
-            finally
-            {
-                System.Buffers.ArrayPool<byte>.Shared.Return(columnBuffer);
-            }
+                else
+                {
+                    valueSpan[0] = 0x00;
+                    valueSpan[1] = 0x01;
+                    columnLen = 2;
+                }
 
-            int endPos = outerBuilder.Build();
-            return buffer.AsSpan(0, endPos).ToArray();
+                outerBuilder.FinishValueWrite(columnLen, tagKey);
+            }
         }
         finally
         {
-            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+            System.Buffers.ArrayPool<byte>.Shared.Return(columnBuffer);
         }
+
+        return outerBuilder.Build();
     }
 
     /// <summary>

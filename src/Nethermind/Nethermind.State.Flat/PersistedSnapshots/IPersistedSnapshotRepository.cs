@@ -10,7 +10,7 @@ public interface IPersistedSnapshotRepository : IDisposable
 
     // Two-layer storage
     PersistedSnapshot AddBaseSnapshot(Snapshot snapshot);
-    PersistedSnapshot AddCompactedSnapshot(StateId from, StateId to, byte[] rsstData);
+    PersistedSnapshot AddCompactedSnapshot(StateId from, StateId to, ReadOnlySpan<byte> rsstData);
 
     // Assembly (mirrors SnapshotRepository.AssembleSnapshots)
     PersistedSnapshotList AssembleSnapshots(StateId targetFrom, StateId persistedState);
