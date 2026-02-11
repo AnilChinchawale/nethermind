@@ -382,7 +382,7 @@ public class PersistenceManager(
         byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(olderData.Length + newerData.Length + 4096);
         try
         {
-            Rsst.RsstBuilder outerBuilder = new(buffer, 0);
+            using Rsst.RsstBuilder outerBuilder = new(buffer);
             ReadOnlySpan<byte> tags = [
                 PersistedSnapshot.AccountTag,
                 PersistedSnapshot.StorageTag,
@@ -392,38 +392,38 @@ public class PersistenceManager(
             ];
 
             byte[] columnBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(olderData.Length, newerData.Length));
+            byte[] tagKey = new byte[1];
             try
             {
-                Span<byte> tagKey = stackalloc byte[1];
                 foreach (byte tag in tags)
                 {
                     tagKey[0] = tag;
                     bool hasOlder = olderOuter.TryGet(tagKey, out ReadOnlySpan<byte> olderColumn);
                     bool hasNewer = newerOuter.TryGet(tagKey, out ReadOnlySpan<byte> newerColumn);
 
-                    outerBuilder.BeginValueWrite();
-                    int valueStart = outerBuilder.CurrentPosition;
+                    int maxColumnSize = Math.Max(olderColumn.Length, newerColumn.Length) + 1024;
+                    Span<byte> valueSpan = outerBuilder.BeginValueWrite(maxColumnSize);
                     int columnLen;
 
                     if (hasOlder && hasNewer)
                     {
                         columnLen = Rsst.RsstBuilder.StreamingMerge(olderColumn, newerColumn, columnBuffer, 0);
-                        columnBuffer.AsSpan(0, columnLen).CopyTo(buffer.AsSpan(valueStart));
+                        columnBuffer.AsSpan(0, columnLen).CopyTo(valueSpan);
                     }
                     else if (hasNewer)
                     {
                         columnLen = newerColumn.Length;
-                        newerColumn.CopyTo(buffer.AsSpan(valueStart));
+                        newerColumn.CopyTo(valueSpan);
                     }
                     else if (hasOlder)
                     {
                         columnLen = olderColumn.Length;
-                        olderColumn.CopyTo(buffer.AsSpan(valueStart));
+                        olderColumn.CopyTo(valueSpan);
                     }
                     else
                     {
-                        buffer[valueStart] = 0x00;
-                        buffer[valueStart + 1] = 0x01;
+                        valueSpan[0] = 0x00;
+                        valueSpan[1] = 0x01;
                         columnLen = 2;
                     }
 

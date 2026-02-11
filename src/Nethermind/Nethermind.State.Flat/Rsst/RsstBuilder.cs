@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Nethermind.State.Flat.Rsst;
 
@@ -14,54 +16,67 @@ namespace Nethermind.State.Flat.Rsst;
 ///
 /// Entry format (value first, lengths forward-readable from ValueLengthOffset):
 ///   [Value][ValueLength: LEB128][KeyLength: LEB128][RemainingKey]
-///
-/// Span-based API: accepts preallocated buffer, writes directly, returns final size.
 /// </summary>
-public sealed class RsstBuilder
+public ref struct RsstBuilder
 {
-    private readonly byte[] _output;
-    private readonly int _startOffset;
+    private Span<byte> _output;
     private int _position;
 
-    // Separator storage: contiguous byte buffer + per-entry metadata
-    private byte[] _separatorBuffer = new byte[256];
+    // Working buffers allocated from ArrayPool
+    private readonly byte[] _separatorBuffer;
     private int _separatorBufferPos;
-    private readonly List<(int SepOffset, int SepLength, int ValueLengthOffset)> _entries = new();
+    private readonly RsstEntry[] _entriesBuffer;
+    private int _entryCount;
 
-    // For streaming separator computation (only need previous key)
-    private byte[] _prevKey = Array.Empty<byte>();
+    // Previous key buffer for streaming separator computation
+    private readonly byte[] _prevKeyBuffer;
     private int _prevKeyLength;
 
-    public int EntryCount => _entries.Count;
-    public byte[] OutputBuffer => _output;
-    public int CurrentPosition => _position;
+    public readonly struct RsstEntry(int sepOffset, int sepLen, int valueLengthOffset)
+    {
+        public readonly int SepOffset = sepOffset;
+        public readonly int SepLen = sepLen;
+        public readonly int ValueLengthOffset = valueLengthOffset;
+    }
 
     /// <summary>
-    /// Create builder writing into preallocated output buffer.
+    /// Create builder writing into output span.
+    /// Allocates working buffers from ArrayPool - call Dispose() to return them.
     /// </summary>
-    public RsstBuilder(byte[] output, int startOffset = 0)
+    public RsstBuilder(Span<byte> output)
     {
         _output = output;
-        _startOffset = startOffset;
-        _position = startOffset;
+        _position = 0;
+        _separatorBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(65536);
+        _separatorBufferPos = 0;
+        _entriesBuffer = System.Buffers.ArrayPool<RsstEntry>.Shared.Rent(10000);
+        _entryCount = 0;
+        _prevKeyBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(256);
+        _prevKeyLength = 0;
     }
 
     /// <summary>
-    /// Backward-compat: allocate large buffer for tests.
+    /// Return pooled buffers to ArrayPool.
     /// </summary>
-    public RsstBuilder() : this(new byte[4 * 1024 * 1024], 0) { }
-
-    /// <summary>
-    /// Begin writing a value. Returns current position where value should be written.
-    /// Call FinishValueWrite after writing the value.
-    /// </summary>
-    public void BeginValueWrite()
+    public void Dispose()
     {
-        // Position is already set for value write
+        System.Buffers.ArrayPool<byte>.Shared.Return(_separatorBuffer);
+        System.Buffers.ArrayPool<RsstEntry>.Shared.Return(_entriesBuffer);
+        System.Buffers.ArrayPool<byte>.Shared.Return(_prevKeyBuffer);
     }
 
     /// <summary>
-    /// Finish value write after writing actualLen bytes. Computes separator and writes metadata.
+    /// Begin writing a value. Returns a span where the caller should write the value.
+    /// After writing, call FinishValueWrite with the actual length and key.
+    /// </summary>
+    public Span<byte> BeginValueWrite(int maxSize)
+    {
+        return _output.Slice(_position, maxSize);
+    }
+
+    /// <summary>
+    /// Finish value write after writing actualLen bytes to the span from BeginValueWrite.
+    /// Computes separator and writes metadata.
     /// Key must be greater than previous key (sorted order).
     /// </summary>
     public void FinishValueWrite(int actualLen, ReadOnlySpan<byte> key)
@@ -70,13 +85,15 @@ public sealed class RsstBuilder
 
         // Compute separator eagerly (only need prevKey, currKey - no nextKey in streaming)
         int sepLen = ComputeSeparatorLength(
-            _prevKey.AsSpan(0, _prevKeyLength),
+            _prevKeyBuffer[.._prevKeyLength],
             key,
             nextKey: default);
 
         // Store separator in contiguous buffer
-        EnsureSeparatorBufferCapacity(_separatorBufferPos + sepLen);
-        key[..sepLen].CopyTo(_separatorBuffer.AsSpan(_separatorBufferPos));
+        if (_separatorBufferPos + sepLen > _separatorBuffer.Length)
+            throw new InvalidOperationException("Separator buffer overflow");
+
+        key[..sepLen].CopyTo(_separatorBuffer[_separatorBufferPos..]);
         int sepOffset = _separatorBufferPos;
         _separatorBufferPos += sepLen;
 
@@ -87,29 +104,33 @@ public sealed class RsstBuilder
         // Write metadata at valueLengthOffset: [ValueLength LEB128][RemainingKeyLength LEB128][RemainingKey]
         Span<byte> leb = stackalloc byte[10];
         int lebLen = Leb128.Write(leb, 0, actualLen);
-        leb[..lebLen].CopyTo(_output.AsSpan(valueLengthOffset));
+        leb[..lebLen].CopyTo(_output[valueLengthOffset..]);
         int pos = valueLengthOffset + lebLen;
 
         lebLen = Leb128.Write(leb, 0, remainingKeyLength);
-        leb[..lebLen].CopyTo(_output.AsSpan(pos));
+        leb[..lebLen].CopyTo(_output[pos..]);
         pos += lebLen;
 
         if (remainingKeyLength > 0)
         {
-            remainingKey.CopyTo(_output.AsSpan(pos));
+            remainingKey.CopyTo(_output[pos..]);
             pos += remainingKeyLength;
         }
 
         // Record entry
-        _entries.Add((sepOffset, sepLen, valueLengthOffset));
+        if (_entryCount >= _entriesBuffer.Length)
+            throw new InvalidOperationException("Entries buffer overflow");
+
+        _entriesBuffer[_entryCount++] = new RsstEntry(sepOffset, sepLen, valueLengthOffset);
 
         // Update position past metadata
         _position = pos;
 
         // Update prevKey for next entry
-        if (_prevKey.Length < key.Length)
-            Array.Resize(ref _prevKey, key.Length);
-        key.CopyTo(_prevKey);
+        if (_prevKeyLength < key.Length && key.Length > _prevKeyBuffer.Length)
+            throw new InvalidOperationException("Previous key buffer too small");
+
+        key.CopyTo(_prevKeyBuffer);
         _prevKeyLength = key.Length;
     }
 
@@ -118,8 +139,8 @@ public sealed class RsstBuilder
     /// </summary>
     public void Add(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value)
     {
-        BeginValueWrite();
-        value.CopyTo(_output.AsSpan(_position));
+        Span<byte> valueSpan = BeginValueWrite(value.Length);
+        value.CopyTo(valueSpan);
         FinishValueWrite(value.Length, key);
     }
 
@@ -128,7 +149,7 @@ public sealed class RsstBuilder
     /// </summary>
     public int Build()
     {
-        if (_entries.Count == 0)
+        if (_entryCount == 0)
         {
             // Empty RSST: [IndexSize=0 LEB128][LEB128ByteCount=1]
             _output[_position] = 0x00;
@@ -139,58 +160,71 @@ public sealed class RsstBuilder
         int dataRegionEnd = _position;
         int indexStart = dataRegionEnd;
 
-        // Build leaf nodes bottom-up
-        List<(int Offset, int FirstSepOffset, int FirstSepLen, int LastSepOffset, int LastSepLen)> currentLevel = new();
+        // Build leaf nodes bottom-up using stackalloc for current level
+        int maxLevelSize = (_entryCount + Rsst.MaxLeafEntries - 1) / Rsst.MaxLeafEntries;
+        Span<NodeInfo> currentLevel = stackalloc NodeInfo[maxLevelSize];
+        Span<NodeInfo> nextLevel = stackalloc NodeInfo[maxLevelSize];  // Allocate outside loop
+        int currentLevelCount = 0;
+
         int entryIdx = 0;
-        int indexOffset = 0;
-
-        while (entryIdx < _entries.Count)
+        while (entryIdx < _entryCount)
         {
-            int count = Math.Min(Rsst.MaxLeafEntries, _entries.Count - entryIdx);
+            int count = Math.Min(Rsst.MaxLeafEntries, _entryCount - entryIdx);
+            RsstEntry first = _entriesBuffer[entryIdx];
+            RsstEntry last = _entriesBuffer[entryIdx + count - 1];
 
-            (int sepOffset, int sepLen, int vlOffset) first = _entries[entryIdx];
+            ReadOnlySpan<RsstEntry> leafEntries = _entriesBuffer.AsSpan(entryIdx, count);
+            int nodeLen = WriteLeafNode(_output[_position..], leafEntries);
 
-            ReadOnlySpan<(int, int, int)> leafEntries = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_entries).Slice(entryIdx, count);
-            int nodeLen = WriteLeafNode(_output.AsSpan(_position), leafEntries);
+            currentLevel[currentLevelCount++] = new NodeInfo(
+                _position - indexStart,
+                first.SepOffset,
+                first.SepLen,
+                last.SepOffset,
+                last.SepLen
+            );
 
-            currentLevel.Add((_position - indexStart, first.sepOffset, first.sepLen, _entries[entryIdx + count - 1].Item1, _entries[entryIdx + count - 1].Item2));
             _position += nodeLen;
-            indexOffset += nodeLen;
-
             entryIdx += count;
         }
 
         // Build internal nodes bottom-up until single root
-        while (currentLevel.Count > 1)
+        while (currentLevelCount > 1)
         {
-            List<(int, int, int, int, int)> nextLevel = new();
+            int nextLevelCount = 0;
+
             int childIdx = 0;
-
-            while (childIdx < currentLevel.Count)
+            while (childIdx < currentLevelCount)
             {
-                int childCount = Math.Min(Rsst.MaxLeafEntries, currentLevel.Count - childIdx);
+                int childCount = Math.Min(Rsst.MaxLeafEntries, currentLevelCount - childIdx);
+                NodeInfo first = currentLevel[childIdx];
+                NodeInfo last = currentLevel[childIdx + childCount - 1];
 
-                var first = currentLevel[childIdx];
-                var last = currentLevel[childIdx + childCount - 1];
+                int nodeLen = WriteInternalNode(_output[_position..], currentLevel.Slice(childIdx, childCount), indexStart);
 
-                int nodeLen = WriteInternalNode(_output.AsSpan(_position), currentLevel, childIdx, childCount, indexStart);
+                nextLevel[nextLevelCount++] = new NodeInfo(
+                    _position - indexStart,
+                    first.FirstSepOffset,
+                    first.FirstSepLen,
+                    last.LastSepOffset,
+                    last.LastSepLen
+                );
 
-                nextLevel.Add((_position - indexStart, first.Item2, first.Item3, last.Item4, last.Item5));
                 _position += nodeLen;
-                indexOffset += nodeLen;
-
                 childIdx += childCount;
             }
 
-            currentLevel = nextLevel;
+            // Swap levels for next iteration
+            nextLevel[..nextLevelCount].CopyTo(currentLevel);
+            currentLevelCount = nextLevelCount;
         }
 
-        int indexSize = indexOffset;
+        int indexSize = _position - indexStart;
 
         // Write trailer: [IndexSize LEB128][LEB128ByteCount: 1 byte]
         Span<byte> trailerLeb = stackalloc byte[5];
         int trailerLebLen = Leb128.Write(trailerLeb, 0, indexSize);
-        trailerLeb[..trailerLebLen].CopyTo(_output.AsSpan(_position));
+        trailerLeb[..trailerLebLen].CopyTo(_output[_position..]);
         _position += trailerLebLen;
         _output[_position] = (byte)trailerLebLen;
         _position++;
@@ -198,19 +232,16 @@ public sealed class RsstBuilder
         return _position;
     }
 
-    /// <summary>
-    /// Convenience: allocate + Build() + slice to exact size.
-    /// </summary>
-    public byte[] BuildToArray()
+    private readonly struct NodeInfo(int offset, int firstSepOffset, int firstSepLen, int lastSepOffset, int lastSepLen)
     {
-        int endPos = Build();
-        int length = endPos - _startOffset;
-        byte[] result = new byte[length];
-        _output.AsSpan(_startOffset, length).CopyTo(result);
-        return result;
+        public readonly int Offset = offset;
+        public readonly int FirstSepOffset = firstSepOffset;
+        public readonly int FirstSepLen = firstSepLen;
+        public readonly int LastSepOffset = lastSepOffset;
+        public readonly int LastSepLen = lastSepLen;
     }
 
-    private int WriteLeafNode(Span<byte> output, ReadOnlySpan<(int SepOffset, int SepLen, int ValueLengthOffset)> entries)
+    private readonly int WriteLeafNode(Span<byte> output, ReadOnlySpan<RsstEntry> entries)
     {
         int count = entries.Length;
         bool uniform = true;
@@ -266,7 +297,7 @@ public sealed class RsstBuilder
         };
     }
 
-    private int ComputeVariableLeafSize(ReadOnlySpan<(int SepOffset, int SepLen, int ValueLengthOffset)> entries)
+    private readonly int ComputeVariableLeafSize(ReadOnlySpan<RsstEntry> entries)
     {
         int size = 6 + entries.Length * 2;
         for (int i = 0; i < entries.Length; i++)
@@ -278,7 +309,7 @@ public sealed class RsstBuilder
         return size;
     }
 
-    private int WriteVariableLeafNodeInto(Span<byte> output, ReadOnlySpan<(int SepOffset, int SepLen, int ValueLengthOffset)> entries, byte sepLen)
+    private readonly int WriteVariableLeafNodeInto(Span<byte> output, ReadOnlySpan<RsstEntry> entries, byte sepLen)
     {
         int count = entries.Length;
         int headerSize = 6;
@@ -315,7 +346,7 @@ public sealed class RsstBuilder
         return totalSize;
     }
 
-    private int WriteUniformLeafNodeInto(Span<byte> output, ReadOnlySpan<(int SepOffset, int SepLen, int ValueLengthOffset)> entries, byte sepLen, int baseOffset, bool useUint24)
+    private readonly int WriteUniformLeafNodeInto(Span<byte> output, ReadOnlySpan<RsstEntry> entries, byte sepLen, int baseOffset, bool useUint24)
     {
         int count = entries.Length;
         int baseOffsetLebSize = Leb128.EncodedSize(baseOffset);
@@ -355,39 +386,41 @@ public sealed class RsstBuilder
         return totalSize;
     }
 
-    private int WriteInternalNode(Span<byte> output, List<(int Offset, int FirstSepOffset, int FirstSepLen, int LastSepOffset, int LastSepLen)> level, int childIdx, int childCount, int indexStart)
+    private readonly int WriteInternalNode(Span<byte> output, ReadOnlySpan<NodeInfo> nodes, int indexStart)
     {
+        int childCount = nodes.Length;
+
         // First child has empty separator, rest need separator between prev.last and curr.first
         bool uniform = true;
         int sepLen = 0;
         if (childCount > 1)
         {
             sepLen = ComputeSeparatorLengthBetween(
-                _separatorBuffer.AsSpan(level[childIdx].LastSepOffset, level[childIdx].LastSepLen),
-                _separatorBuffer.AsSpan(level[childIdx + 1].FirstSepOffset, level[childIdx + 1].FirstSepLen));
+                _separatorBuffer.AsSpan(nodes[0].LastSepOffset, nodes[0].LastSepLen),
+                _separatorBuffer.AsSpan(nodes[1].FirstSepOffset, nodes[1].FirstSepLen));
 
             for (int i = 2; i < childCount; i++)
             {
                 int s = ComputeSeparatorLengthBetween(
-                    _separatorBuffer.AsSpan(level[childIdx + i - 1].LastSepOffset, level[childIdx + i - 1].LastSepLen),
-                    _separatorBuffer.AsSpan(level[childIdx + i].FirstSepOffset, level[childIdx + i].FirstSepLen));
+                    _separatorBuffer.AsSpan(nodes[i - 1].LastSepOffset, nodes[i - 1].LastSepLen),
+                    _separatorBuffer.AsSpan(nodes[i].FirstSepOffset, nodes[i].FirstSepLen));
                 if (s != sepLen) uniform = false;
             }
         }
 
-        int minOffset = level[childIdx].Offset;
-        int maxOffset = level[childIdx].Offset;
+        int minOffset = nodes[0].Offset;
+        int maxOffset = nodes[0].Offset;
         for (int i = 1; i < childCount; i++)
         {
-            if (level[childIdx + i].Offset < minOffset) minOffset = level[childIdx + i].Offset;
-            if (level[childIdx + i].Offset > maxOffset) maxOffset = level[childIdx + i].Offset;
+            if (nodes[i].Offset < minOffset) minOffset = nodes[i].Offset;
+            if (nodes[i].Offset > maxOffset) maxOffset = nodes[i].Offset;
         }
 
         int range = maxOffset - minOffset;
 
         // Choose format
         int bestFormat = 0;
-        int bestSize = ComputeVariableInternalSize(level, childIdx, childCount, sepLen);
+        int bestSize = ComputeVariableInternalSize(nodes, sepLen);
 
         if (uniform && childCount > 1)
         {
@@ -416,40 +449,41 @@ public sealed class RsstBuilder
 
         return bestFormat switch
         {
-            0 => WriteVariableInternalNodeInto(output, level, childIdx, childCount, indexStart, (byte)sepLen),
-            1 => WriteUniformInternalNodeInto(output, level, childIdx, childCount, indexStart, (byte)sepLen, minOffset, useUint24: true),
-            2 => WriteUniformInternalNodeInto(output, level, childIdx, childCount, indexStart, (byte)sepLen, minOffset, useUint24: false),
+            0 => WriteVariableInternalNodeInto(output, nodes, indexStart, (byte)sepLen),
+            1 => WriteUniformInternalNodeInto(output, nodes, indexStart, (byte)sepLen, minOffset, useUint24: true),
+            2 => WriteUniformInternalNodeInto(output, nodes, indexStart, (byte)sepLen, minOffset, useUint24: false),
             _ => throw new InvalidOperationException()
         };
     }
 
-    private int ComputeVariableInternalSize(List<(int Offset, int FirstSepOffset, int FirstSepLen, int LastSepOffset, int LastSepLen)> level, int childIdx, int childCount, int sepLen)
+    private readonly int ComputeVariableInternalSize(ReadOnlySpan<NodeInfo> nodes, int sepLen)
     {
-        int size = 6 + childCount * 2;
-        size += Leb128.EncodedSize(level[childIdx].Offset);
-        for (int i = 1; i < childCount; i++)
+        int size = 6 + nodes.Length * 2;
+        size += Leb128.EncodedSize(nodes[0].Offset);
+        for (int i = 1; i < nodes.Length; i++)
         {
             int s = ComputeSeparatorLengthBetween(
-                _separatorBuffer.AsSpan(level[childIdx + i - 1].LastSepOffset, level[childIdx + i - 1].LastSepLen),
-                _separatorBuffer.AsSpan(level[childIdx + i].FirstSepOffset, level[childIdx + i].FirstSepLen));
-            size += Leb128.EncodedSize(s) + s + Leb128.EncodedSize(level[childIdx + i].Offset);
+                _separatorBuffer.AsSpan(nodes[i - 1].LastSepOffset, nodes[i - 1].LastSepLen),
+                _separatorBuffer.AsSpan(nodes[i].FirstSepOffset, nodes[i].FirstSepLen));
+            size += Leb128.EncodedSize(s) + s + Leb128.EncodedSize(nodes[i].Offset);
         }
         return size;
     }
 
-    private int WriteVariableInternalNodeInto(Span<byte> output, List<(int Offset, int FirstSepOffset, int FirstSepLen, int LastSepOffset, int LastSepLen)> level, int childIdx, int childCount, int indexStart, byte sepLen)
+    private readonly int WriteVariableInternalNodeInto(Span<byte> output, ReadOnlySpan<NodeInfo> nodes, int indexStart, byte sepLen)
     {
+        int childCount = nodes.Length;
         int headerSize = 6;
         int offsetTableSize = childCount * 2;
 
-        int dataSize = Leb128.EncodedSize(level[childIdx].Offset);
+        int dataSize = Leb128.EncodedSize(nodes[0].Offset);
         Span<byte> tempSep = stackalloc byte[256];
         for (int i = 1; i < childCount; i++)
         {
             int s = WriteSeparatorBetween(tempSep,
-                _separatorBuffer.AsSpan(level[childIdx + i - 1].LastSepOffset, level[childIdx + i - 1].LastSepLen),
-                _separatorBuffer.AsSpan(level[childIdx + i].FirstSepOffset, level[childIdx + i].FirstSepLen));
-            dataSize += Leb128.EncodedSize(s) + s + Leb128.EncodedSize(level[childIdx + i].Offset);
+                _separatorBuffer.AsSpan(nodes[i - 1].LastSepOffset, nodes[i - 1].LastSepLen),
+                _separatorBuffer.AsSpan(nodes[i].FirstSepOffset, nodes[i].FirstSepLen));
+            dataSize += Leb128.EncodedSize(s) + s + Leb128.EncodedSize(nodes[i].Offset);
         }
 
         int totalSize = headerSize + offsetTableSize + dataSize;
@@ -463,25 +497,26 @@ public sealed class RsstBuilder
         int entryPos = entryDataStart;
 
         BinaryPrimitives.WriteUInt16LittleEndian(output[headerSize..], (ushort)(entryPos - entryDataStart));
-        entryPos = Leb128.Write(output, entryPos, level[childIdx].Offset);
+        entryPos = Leb128.Write(output, entryPos, nodes[0].Offset);
 
         for (int i = 1; i < childCount; i++)
         {
             BinaryPrimitives.WriteUInt16LittleEndian(output[(headerSize + i * 2)..], (ushort)(entryPos - entryDataStart));
             int s = WriteSeparatorBetween(tempSep,
-                _separatorBuffer.AsSpan(level[childIdx + i - 1].LastSepOffset, level[childIdx + i - 1].LastSepLen),
-                _separatorBuffer.AsSpan(level[childIdx + i].FirstSepOffset, level[childIdx + i].FirstSepLen));
+                _separatorBuffer.AsSpan(nodes[i - 1].LastSepOffset, nodes[i - 1].LastSepLen),
+                _separatorBuffer.AsSpan(nodes[i].FirstSepOffset, nodes[i].FirstSepLen));
             entryPos = Leb128.Write(output, entryPos, s);
             tempSep[..s].CopyTo(output[entryPos..]);
             entryPos += s;
-            entryPos = Leb128.Write(output, entryPos, level[childIdx + i].Offset);
+            entryPos = Leb128.Write(output, entryPos, nodes[i].Offset);
         }
 
         return totalSize;
     }
 
-    private int WriteUniformInternalNodeInto(Span<byte> output, List<(int Offset, int FirstSepOffset, int FirstSepLen, int LastSepOffset, int LastSepLen)> level, int childIdx, int childCount, int indexStart, byte sepLen, int baseOffset, bool useUint24)
+    private readonly int WriteUniformInternalNodeInto(Span<byte> output, ReadOnlySpan<NodeInfo> nodes, int indexStart, byte sepLen, int baseOffset, bool useUint24)
     {
+        int childCount = nodes.Length;
         int baseOffsetLebSize = Leb128.EncodedSize(baseOffset);
         int offsetBytes = useUint24 ? 3 : 2;
         int stride = sepLen + offsetBytes;
@@ -501,18 +536,19 @@ public sealed class RsstBuilder
             if (i == 0)
             {
                 // First child: zero-filled separator
+                output.Slice(pos, sepLen).Clear();
                 pos += sepLen;
             }
             else
             {
                 int s = WriteSeparatorBetween(tempSep,
-                    _separatorBuffer.AsSpan(level[childIdx + i - 1].LastSepOffset, level[childIdx + i - 1].LastSepLen),
-                    _separatorBuffer.AsSpan(level[childIdx + i].FirstSepOffset, level[childIdx + i].FirstSepLen));
+                    _separatorBuffer.AsSpan(nodes[i - 1].LastSepOffset, nodes[i - 1].LastSepLen),
+                    _separatorBuffer.AsSpan(nodes[i].FirstSepOffset, nodes[i].FirstSepLen));
                 tempSep[..sepLen].CopyTo(output[pos..]);
                 pos += sepLen;
             }
 
-            int relative = level[childIdx + i].Offset - baseOffset;
+            int relative = nodes[i].Offset - baseOffset;
             if (useUint24)
             {
                 output[pos] = (byte)(relative & 0xFF);
@@ -530,10 +566,7 @@ public sealed class RsstBuilder
         return totalSize;
     }
 
-    /// <summary>
-    /// Compute separator length (streaming mode: no nextKey).
-    /// Returns separator length. Separator = key[..separatorLen].
-    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int ComputeSeparatorLength(ReadOnlySpan<byte> prevKey, ReadOnlySpan<byte> currKey, ReadOnlySpan<byte> nextKey)
     {
         int minVsPrev = 0;
@@ -557,9 +590,7 @@ public sealed class RsstBuilder
         return len;
     }
 
-    /// <summary>
-    /// Compute separator length between two keys (for internal nodes).
-    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int ComputeSeparatorLengthBetween(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
         int minLen = Math.Min(left.Length, right.Length);
@@ -576,9 +607,7 @@ public sealed class RsstBuilder
         return right.Length;
     }
 
-    /// <summary>
-    /// Write separator between two keys into output buffer. Returns length written.
-    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int WriteSeparatorBetween(Span<byte> output, ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
         int len = ComputeSeparatorLengthBetween(left, right);
@@ -586,6 +615,7 @@ public sealed class RsstBuilder
         return len;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int CommonPrefixLength(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
     {
         int minLen = Math.Min(a.Length, b.Length);
@@ -596,16 +626,7 @@ public sealed class RsstBuilder
         return minLen;
     }
 
-    private void EnsureSeparatorBufferCapacity(int required)
-    {
-        if (_separatorBuffer.Length < required)
-        {
-            int newSize = Math.Max(_separatorBuffer.Length * 2, required);
-            Array.Resize(ref _separatorBuffer, newSize);
-        }
-    }
-
-    public static int StreamingMerge(ReadOnlySpan<byte> older, ReadOnlySpan<byte> newer, byte[] output, int startOffset = 0)
+    public static int StreamingMerge(ReadOnlySpan<byte> older, ReadOnlySpan<byte> newer, Span<byte> output, int startOffset = 0)
     {
         Rsst olderRsst = new(older);
         Rsst newerRsst = new(newer);
@@ -617,66 +638,52 @@ public sealed class RsstBuilder
             return startOffset + 2;
         }
 
-        RsstBuilder builder = new(output, startOffset);
-
-        using Rsst.Enumerator olderEnum = olderRsst.GetEnumerator();
-        using Rsst.Enumerator newerEnum = newerRsst.GetEnumerator();
-
-        bool hasOlder = olderEnum.MoveNext();
-        bool hasNewer = newerEnum.MoveNext();
-
-        while (hasOlder && hasNewer)
+        using (RsstBuilder builder = new(output[startOffset..]))
         {
-            ReadOnlySpan<byte> olderKey = olderEnum.Current.Key;
-            ReadOnlySpan<byte> newerKey = newerEnum.Current.Key;
 
-            int cmp = olderKey.SequenceCompareTo(newerKey);
-            if (cmp < 0)
+            using Rsst.Enumerator olderEnum = olderRsst.GetEnumerator();
+            using Rsst.Enumerator newerEnum = newerRsst.GetEnumerator();
+
+            bool hasOlder = olderEnum.MoveNext();
+            bool hasNewer = newerEnum.MoveNext();
+
+            while (hasOlder && hasNewer)
             {
-                builder.Add(olderKey, olderEnum.Current.Value);
+                ReadOnlySpan<byte> olderKey = olderEnum.Current.Key;
+                ReadOnlySpan<byte> newerKey = newerEnum.Current.Key;
+
+                int cmp = olderKey.SequenceCompareTo(newerKey);
+                if (cmp < 0)
+                {
+                    builder.Add(olderKey, olderEnum.Current.Value);
+                    hasOlder = olderEnum.MoveNext();
+                }
+                else if (cmp > 0)
+                {
+                    builder.Add(newerKey, newerEnum.Current.Value);
+                    hasNewer = newerEnum.MoveNext();
+                }
+                else
+                {
+                    builder.Add(newerKey, newerEnum.Current.Value);
+                    hasOlder = olderEnum.MoveNext();
+                    hasNewer = newerEnum.MoveNext();
+                }
+            }
+
+            while (hasOlder)
+            {
+                builder.Add(olderEnum.Current.Key, olderEnum.Current.Value);
                 hasOlder = olderEnum.MoveNext();
             }
-            else if (cmp > 0)
+
+            while (hasNewer)
             {
-                builder.Add(newerKey, newerEnum.Current.Value);
+                builder.Add(newerEnum.Current.Key, newerEnum.Current.Value);
                 hasNewer = newerEnum.MoveNext();
             }
-            else
-            {
-                builder.Add(newerKey, newerEnum.Current.Value);
-                hasOlder = olderEnum.MoveNext();
-                hasNewer = newerEnum.MoveNext();
-            }
+
+            return startOffset + builder.Build();
         }
-
-        while (hasOlder)
-        {
-            builder.Add(olderEnum.Current.Key, olderEnum.Current.Value);
-            hasOlder = olderEnum.MoveNext();
-        }
-
-        while (hasNewer)
-        {
-            builder.Add(newerEnum.Current.Key, newerEnum.Current.Value);
-            hasNewer = newerEnum.MoveNext();
-        }
-
-        return builder.Build();
-    }
-
-    public static byte[] StreamingMerge(ReadOnlySpan<byte> older, ReadOnlySpan<byte> newer)
-    {
-        byte[] buffer = new byte[older.Length + newer.Length + 1024];
-        int endPos = StreamingMerge(older, newer, buffer, 0);
-        return buffer.AsSpan(0, endPos).ToArray();
-    }
-
-    /// <summary>
-    /// Compute separator key between two keys (for test compatibility).
-    /// </summary>
-    internal static byte[] ComputeSeparatorKey(byte[] left, byte[] right)
-    {
-        int len = ComputeSeparatorLengthBetween(left, right);
-        return right[..len];
     }
 }
