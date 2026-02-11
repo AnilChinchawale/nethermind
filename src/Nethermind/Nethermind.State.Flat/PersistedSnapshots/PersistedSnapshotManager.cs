@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System.Buffers;
+using System.Diagnostics;
 using Nethermind.Core.Extensions;
 using Nethermind.Db;
 using Nethermind.Logging;
@@ -169,16 +170,15 @@ public class PersistedSnapshotManager(
 
         // Pre-extract destructed addresses from newer self-destruct column
         byte[] sdTagKey = [PersistedSnapshot.SelfDestructTag];
+        bool hasSdTag = newerOuter.TryGet(sdTagKey, out ReadOnlySpan<byte> newerSd);
+        Debug.Assert(hasSdTag, $"Missing required tag 0x{PersistedSnapshot.SelfDestructTag:X2} in persisted snapshot");
         HashSet<byte[]> destructedAddresses = new(Bytes.EqualityComparer);
-        if (newerOuter.TryGet(sdTagKey, out ReadOnlySpan<byte> newerSd))
+        Rsst.Rsst sdRsst = new(newerSd);
+        using Rsst.Rsst.Enumerator sdEnum = sdRsst.GetEnumerator();
+        while (sdEnum.MoveNext())
         {
-            Rsst.Rsst sdRsst = new(newerSd);
-            using Rsst.Rsst.Enumerator sdEnum = sdRsst.GetEnumerator();
-            while (sdEnum.MoveNext())
-            {
-                if (sdEnum.Current.Value.IsEmpty) // destructed
-                    destructedAddresses.Add(sdEnum.Current.Key.ToArray());
-            }
+            if (sdEnum.Current.Value.IsEmpty) // destructed
+                destructedAddresses.Add(sdEnum.Current.Key.ToArray());
         }
 
         using RsstBuilder outerBuilder = new(output);
@@ -196,44 +196,18 @@ public class PersistedSnapshotManager(
             tagKey[0] = tag;
             bool hasOlder = olderOuter.TryGet(tagKey, out ReadOnlySpan<byte> olderColumn);
             bool hasNewer = newerOuter.TryGet(tagKey, out ReadOnlySpan<byte> newerColumn);
+            Debug.Assert(hasOlder && hasNewer, $"Missing required tag 0x{tag:X2} in persisted snapshot");
 
             int maxColumnSize = olderColumn.Length + newerColumn.Length + 1024;
             Span<byte> valueSpan = outerBuilder.BeginValueWrite(maxColumnSize);
-            int columnLen;
 
-            if (hasOlder && hasNewer)
+            int columnLen = tag switch
             {
-                columnLen = tag switch
-                {
-                    PersistedSnapshot.StorageTag => NestedStreamingMergeWithSelfDestruct(olderColumn, newerColumn, valueSpan, destructedAddresses),
-                    PersistedSnapshot.SelfDestructTag => SelfDestructMerge(olderColumn, newerColumn, valueSpan),
-                    PersistedSnapshot.StorageNodeTag => NestedStreamingMerge(olderColumn, newerColumn, valueSpan),
-                    _ => RsstBuilder.StreamingMerge(olderColumn, newerColumn, valueSpan, 0),
-                };
-            }
-            else if (hasNewer)
-            {
-                columnLen = newerColumn.Length;
-                newerColumn.CopyTo(valueSpan);
-            }
-            else if (hasOlder)
-            {
-                if (tag == PersistedSnapshot.StorageTag && destructedAddresses.Count > 0)
-                {
-                    columnLen = FilterDestructedFromNested(olderColumn, valueSpan, destructedAddresses);
-                }
-                else
-                {
-                    columnLen = olderColumn.Length;
-                    olderColumn.CopyTo(valueSpan);
-                }
-            }
-            else
-            {
-                valueSpan[0] = 0x00;
-                valueSpan[1] = 0x01;
-                columnLen = 2;
-            }
+                PersistedSnapshot.StorageTag => NestedStreamingMergeWithSelfDestruct(olderColumn, newerColumn, valueSpan, destructedAddresses),
+                PersistedSnapshot.SelfDestructTag => SelfDestructMerge(olderColumn, newerColumn, valueSpan),
+                PersistedSnapshot.StorageNodeTag => NestedStreamingMerge(olderColumn, newerColumn, valueSpan),
+                _ => RsstBuilder.StreamingMerge(olderColumn, newerColumn, valueSpan, 0),
+            };
 
             outerBuilder.FinishValueWrite(columnLen, tagKey);
         }
@@ -389,30 +363,6 @@ public class PersistedSnapshotManager(
             hasNewer = newerEnum.MoveNext();
         }
 
-        return builder.Build();
-    }
-
-    /// <summary>
-    /// Filter out destructed addresses from a nested RSST (for the older-only storage case).
-    /// </summary>
-    private static int FilterDestructedFromNested(ReadOnlySpan<byte> data, Span<byte> output, HashSet<byte[]> destructedAddresses)
-    {
-        Rsst.Rsst rsst = new(data);
-        if (rsst.EntryCount == 0)
-        {
-            output[0] = 0x00;
-            output[1] = 0x01;
-            return 2;
-        }
-
-        var lookup = destructedAddresses.GetAlternateLookup<ReadOnlySpan<byte>>();
-        using RsstBuilder builder = new(output);
-        using Rsst.Rsst.Enumerator enumerator = rsst.GetEnumerator();
-        while (enumerator.MoveNext())
-        {
-            if (!lookup.Contains(enumerator.Current.Key))
-                builder.Add(enumerator.Current.Key, enumerator.Current.Value);
-        }
         return builder.Build();
     }
 
