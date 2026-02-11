@@ -174,6 +174,114 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     }
 
     /// <summary>
+    /// Assemble persisted snapshots for compaction, walking backward from toStateId.
+    /// If a compacted snapshot spans too far back (below minBlockNumber), fall back to base.
+    /// Returns oldest-first list, or empty if fewer than 2 snapshots found.
+    /// Mirrors <see cref="SnapshotRepository.AssembleSnapshotsUntil"/>.
+    /// </summary>
+    public PersistedSnapshotList AssembleSnapshotsForCompaction(StateId toStateId, long minBlockNumber)
+    {
+        lock (_lock)
+        {
+            List<PersistedSnapshot> result = new();
+            StateId current = toStateId;
+
+            while (true)
+            {
+                PersistedSnapshot? snapshot = null;
+
+                // Try compacted first
+                if (_compactedSnapshots.TryGetValue(current, out PersistedSnapshot? compacted))
+                {
+                    if (compacted.From.BlockNumber < minBlockNumber)
+                    {
+                        // Compacted spans too far back, try base
+                        if (_baseSnapshots.TryGetValue(current, out PersistedSnapshot? baseSnap))
+                        {
+                            if (baseSnap.From.BlockNumber < minBlockNumber)
+                                break; // Base also spans too far
+                            snapshot = baseSnap;
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        snapshot = compacted;
+                    }
+                }
+                else if (_baseSnapshots.TryGetValue(current, out PersistedSnapshot? baseSnap))
+                {
+                    if (baseSnap.From.BlockNumber < minBlockNumber)
+                        break;
+                    snapshot = baseSnap;
+                }
+                else
+                {
+                    break;
+                }
+
+                if (!snapshot.TryAcquire())
+                {
+                    DisposeList(result);
+                    return PersistedSnapshotList.Empty;
+                }
+
+                result.Add(snapshot);
+
+                if (snapshot.From == current)
+                    break; // Prevent infinite loop
+
+                if (snapshot.From.BlockNumber == minBlockNumber)
+                    break;
+
+                current = snapshot.From;
+            }
+
+            if (result.Count < 2)
+            {
+                DisposeList(result);
+                return PersistedSnapshotList.Empty;
+            }
+
+            result.Reverse(); // oldest-first
+            return new PersistedSnapshotList(result.ToArray());
+        }
+    }
+
+    /// <summary>
+    /// Remove compacted snapshots whose To.BlockNumber matches the given block number.
+    /// </summary>
+    public int RemoveCompactedSnapshotsAtBlock(long blockNumber)
+    {
+        lock (_lock)
+        {
+            List<StateId> toRemove = new();
+            foreach (KeyValuePair<StateId, PersistedSnapshot> kv in _compactedSnapshots)
+            {
+                if (kv.Value.To.BlockNumber == blockNumber)
+                    toRemove.Add(kv.Key);
+            }
+
+            int removed = 0;
+            foreach (StateId key in toRemove)
+            {
+                if (_compactedSnapshots.TryRemove(key, out PersistedSnapshot? snapshot))
+                {
+                    RemoveFromCatalog(snapshot.Id);
+                    snapshot.Dispose();
+                    removed++;
+                }
+            }
+
+            if (removed > 0) _catalog.Save();
+            return removed;
+        }
+    }
+
+    /// <summary>
     /// Prune snapshots with To.BlockNumber before the given state.
     /// </summary>
     public int PruneBefore(StateId stateId)

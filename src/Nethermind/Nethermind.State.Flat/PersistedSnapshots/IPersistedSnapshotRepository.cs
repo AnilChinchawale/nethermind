@@ -15,6 +15,10 @@ public interface IPersistedSnapshotRepository : IDisposable
     // Assembly (mirrors SnapshotRepository.AssembleSnapshots)
     PersistedSnapshotList AssembleSnapshots(StateId targetFrom, StateId persistedState);
 
+    // Compaction assembly (mirrors SnapshotRepository.AssembleSnapshotsUntil)
+    PersistedSnapshotList AssembleSnapshotsForCompaction(StateId toStateId, long minBlockNumber);
+    int RemoveCompactedSnapshotsAtBlock(long blockNumber);
+
     // Lifecycle
     int PruneBefore(StateId stateId);
 }

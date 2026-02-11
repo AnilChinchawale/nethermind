@@ -255,7 +255,10 @@ public class PersistedSnapshotTests
         ]);
         byte[] data2 = PersistedSnapshotBuilder.Build(snap2);
 
-        byte[] merged = PersistenceManager.MergeSnapshotData(data1, data2);
+        byte[] merged = PersistedSnapshotManager.MergeSnapshots(new PersistedSnapshotList([
+            new(0, s0, s1, PersistedSnapshotType.Base, data1),
+            new(1, s1, s2, PersistedSnapshotType.Base, data2)
+        ]));
         PersistedSnapshot persisted = new(1, s0, s2, PersistedSnapshotType.Base, merged);
 
         // addrA slot 1 should be overridden to val3
