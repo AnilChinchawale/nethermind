@@ -60,10 +60,4 @@ public interface IFlatDbConfig : IConfig
 
     [ConfigItem(Description = "Max arena file size in bytes", DefaultValue = "4294967296")]
     long ArenaFileSizeBytes { get; set; }
-
-    [ConfigItem(Description = "Enable bloom filters on persisted snapshots for fast negative lookups", DefaultValue = "true")]
-    bool EnableBloomFilters { get; set; }
-
-    [ConfigItem(Description = "Bloom filter bits per key (higher = lower false positive rate, more memory)", DefaultValue = "10")]
-    double BloomFilterBitsPerKey { get; set; }
 }

@@ -64,7 +64,6 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     {
         byte[] data = _arenaManager.Read(entry.Location);
         PersistedSnapshot snapshot = new(entry.Id, entry.From, entry.To, entry.Type, data);
-        snapshot.BuildBloom();
 
         if (entry.Type == PersistedSnapshotType.Base)
             _baseSnapshots[entry.To] = snapshot;
@@ -87,7 +86,6 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
             _catalog.Save();
 
             PersistedSnapshot persisted = new(id, snapshot.From, snapshot.To, PersistedSnapshotType.Base, (byte[])rsstData.Clone());
-            persisted.BuildBloom();
             _baseSnapshots[snapshot.To] = persisted;
             return persisted;
         }
@@ -106,7 +104,6 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
             _catalog.Save();
 
             PersistedSnapshot persisted = new(id, from, to, PersistedSnapshotType.Compacted, (byte[])rsstData.Clone());
-            persisted.BuildBloom();
             _compactedSnapshots[to] = persisted;
             return persisted;
         }

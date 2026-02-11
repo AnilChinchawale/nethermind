@@ -32,7 +32,6 @@ public sealed class PersistedSnapshot : RefCountingDisposable
 
     private readonly Memory<byte> _data;
     private readonly IDisposable? _dataOwner;
-    private SnapshotBloomFilter? _bloom;
 
     public int Id { get; }
     public StateId From { get; }
@@ -40,7 +39,6 @@ public sealed class PersistedSnapshot : RefCountingDisposable
     public PersistedSnapshotType Type { get; }
 
     public ReadOnlyMemory<byte> Data => _data;
-    public SnapshotBloomFilter? Bloom => _bloom;
 
     public PersistedSnapshot(int id, StateId from, StateId to, PersistedSnapshotType type, Memory<byte> data, IDisposable? dataOwner = null)
     {
@@ -52,42 +50,20 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         _dataOwner = dataOwner;
     }
 
-    /// <summary>
-    /// Build and attach a bloom filter from the RSST data for fast negative lookups.
-    /// </summary>
-    public void BuildBloom(double bitsPerKey = 10.0) =>
-        _bloom = SnapshotBloomFilter.BuildFromRsst(_data.Span, bitsPerKey);
 
-    public byte[]? TryGetAccount(Address address)
-    {
-        Span<byte> bloomKey = stackalloc byte[1 + Address.Size];
-        bloomKey[0] = AccountTag;
-        address.Bytes.CopyTo(bloomKey[1..]);
-        if (!BloomCheck(bloomKey)) return null;
-
-        return TryGetFromColumn(AccountTag, address.Bytes);
-    }
+    public byte[]? TryGetAccount(Address address) =>
+        TryGetFromColumn(AccountTag, address.Bytes);
 
     public byte[]? TryGetSlot(Address address, in UInt256 index)
     {
-        Span<byte> bloomKey = stackalloc byte[1 + Address.Size + 32];
-        bloomKey[0] = StorageTag;
-        address.Bytes.CopyTo(bloomKey[1..]);
-        index.ToBigEndian(bloomKey.Slice(1 + Address.Size, 32));
-        if (!BloomCheck(bloomKey)) return null;
-
-        return TryGetFromColumn(StorageTag, bloomKey[1..]);
+        Span<byte> key = stackalloc byte[Address.Size + 32];
+        address.Bytes.CopyTo(key);
+        index.ToBigEndian(key[Address.Size..]);
+        return TryGetFromColumn(StorageTag, key);
     }
 
-    public bool IsSelfDestructed(Address address)
-    {
-        Span<byte> bloomKey = stackalloc byte[1 + Address.Size];
-        bloomKey[0] = SelfDestructTag;
-        address.Bytes.CopyTo(bloomKey[1..]);
-        if (!BloomCheck(bloomKey)) return false;
-
-        return TryGetFromColumn(SelfDestructTag, address.Bytes) is not null;
-    }
+    public bool IsSelfDestructed(Address address) =>
+        TryGetFromColumn(SelfDestructTag, address.Bytes) is not null;
 
     /// <summary>
     /// Get the self-destruct flag with boolean distinction.
@@ -96,11 +72,6 @@ public sealed class PersistedSnapshot : RefCountingDisposable
     /// </summary>
     public bool? TryGetSelfDestructFlag(Address address)
     {
-        Span<byte> bloomKey = stackalloc byte[1 + Address.Size];
-        bloomKey[0] = SelfDestructTag;
-        address.Bytes.CopyTo(bloomKey[1..]);
-        if (!BloomCheck(bloomKey)) return null;
-
         byte[]? result = TryGetFromColumn(SelfDestructTag, address.Bytes);
         if (result is null) return null;
         return result.Length > 0 && result[0] == 0x01;
@@ -108,25 +79,19 @@ public sealed class PersistedSnapshot : RefCountingDisposable
 
     public byte[]? TryLoadStateNodeRlp(in TreePath path)
     {
-        Span<byte> bloomKey = stackalloc byte[1 + 32 + 1];
-        bloomKey[0] = StateNodeTag;
-        path.Path.Bytes.CopyTo(bloomKey[1..]);
-        bloomKey[33] = (byte)path.Length;
-        if (!BloomCheck(bloomKey)) return null;
-
-        return TryGetFromColumn(StateNodeTag, bloomKey[1..]);
+        Span<byte> key = stackalloc byte[32 + 1];
+        path.Path.Bytes.CopyTo(key);
+        key[32] = (byte)path.Length;
+        return TryGetFromColumn(StateNodeTag, key);
     }
 
     public byte[]? TryLoadStorageNodeRlp(Hash256 address, in TreePath path)
     {
-        Span<byte> bloomKey = stackalloc byte[1 + 32 + 32 + 1];
-        bloomKey[0] = StorageNodeTag;
-        address.Bytes.CopyTo(bloomKey[1..]);
-        path.Path.Bytes.CopyTo(bloomKey[33..]);
-        bloomKey[65] = (byte)path.Length;
-        if (!BloomCheck(bloomKey)) return null;
-
-        return TryGetFromColumn(StorageNodeTag, bloomKey[1..]);
+        Span<byte> key = stackalloc byte[32 + 32 + 1];
+        address.Bytes.CopyTo(key);
+        path.Path.Bytes.CopyTo(key[32..]);
+        key[64] = (byte)path.Length;
+        return TryGetFromColumn(StorageNodeTag, key);
     }
 
     private byte[]? TryGetFromColumn(byte tag, ReadOnlySpan<byte> entityKey)
@@ -141,19 +106,6 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         return inner.TryGet(entityKey, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool BloomCheck(ReadOnlySpan<byte> key)
-    {
-        if (_bloom is null) return true;
-        if (_bloom.MightContain(key))
-        {
-            Metrics.BloomFilterPositives++;
-            return true;
-        }
-
-        Metrics.BloomFilterNegatives++;
-        return false;
-    }
 
     /// <summary>
     /// Resolve a NodeRef by reading the entry value from the referenced snapshot.

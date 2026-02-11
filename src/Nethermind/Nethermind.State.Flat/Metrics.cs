@@ -114,14 +114,4 @@ public static class Metrics
     [CounterMetric]
     [Description("Number of persisted snapshot prunes")]
     public static long PersistedSnapshotPrunes { get; set; }
-
-    [DetailedMetric]
-    [CounterMetric]
-    [Description("Bloom filter negative lookups (definite miss)")]
-    public static long BloomFilterNegatives { get; set; }
-
-    [DetailedMetric]
-    [CounterMetric]
-    [Description("Bloom filter positive lookups (possible hit, proceed to RSST)")]
-    public static long BloomFilterPositives { get; set; }
 }

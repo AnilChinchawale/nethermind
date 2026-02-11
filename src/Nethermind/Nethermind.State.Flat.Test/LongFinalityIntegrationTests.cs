@@ -140,35 +140,6 @@ public class LongFinalityIntegrationTests
         }
     }
 
-    [Test]
-    public void BloomFilter_BuiltOnReload()
-    {
-        StateId s0 = new(0, Keccak.EmptyTreeHash);
-        StateId s1 = new(1, Keccak.Compute("1"));
-        TreePath path = new(Keccak.Compute("bloom_path"), 4);
-
-        // Session 1: persist
-        using (PersistedSnapshotRepository repo = new(_testDir, maxArenaSize: 4096))
-        {
-            repo.LoadFromCatalog();
-            repo.PersistSnapshot(CreateSnapshot(s0, s1, c =>
-                c.StateNodes[path] = new TrieNode(NodeType.Leaf, [0xC0])));
-        }
-
-        // Session 2: reload - bloom should be auto-built
-        using (PersistedSnapshotRepository repo = new(_testDir, maxArenaSize: 4096))
-        {
-            repo.LoadFromCatalog();
-            PersistedSnapshot? reloaded = repo.FindById(1);
-            Assert.That(reloaded, Is.Not.Null);
-            Assert.That(reloaded!.Bloom, Is.Not.Null, "Bloom should be built on load");
-            Assert.That(reloaded.TryLoadStateNodeRlp(path), Is.EqualTo(new byte[] { 0xC0 }));
-
-            // Missing path should be rejected by bloom (or RSST)
-            TreePath missingPath = new(Keccak.Compute("missing"), 3);
-            Assert.That(reloaded.TryLoadStateNodeRlp(missingPath), Is.Null);
-        }
-    }
 
     [Test]
     public void MergeSnapshotData_AllEntryTypes()
@@ -235,35 +206,6 @@ public class LongFinalityIntegrationTests
         Assert.That(list.Count, Is.EqualTo(snapshotCount));
     }
 
-    [Test]
-    public void CompactedSnapshot_WithBloom_QueriesCorrectly()
-    {
-        using PersistedSnapshotRepository repo = new(_testDir, maxArenaSize: 4096);
-        repo.LoadFromCatalog();
-
-        StateId s0 = new(0, Keccak.EmptyTreeHash);
-        StateId s1 = new(1, Keccak.Compute("1"));
-        StateId s2 = new(2, Keccak.Compute("2"));
-
-        // Create two base snapshots and merge their data
-        Snapshot snap1 = CreateSnapshot(s0, s1, c =>
-            c.Accounts[TestItem.AddressA] = Build.An.Account.WithBalance(100).TestObject);
-        Snapshot snap2 = CreateSnapshot(s1, s2, c =>
-            c.Accounts[TestItem.AddressB] = Build.An.Account.WithBalance(200).TestObject);
-
-        PersistedSnapshot base1 = repo.PersistSnapshot(snap1);
-        byte[] data1 = PersistedSnapshotBuilder.Build(snap1);
-        byte[] data2 = PersistedSnapshotBuilder.Build(snap2);
-        byte[] merged = PersistenceManager.MergeSnapshotData(data1, data2);
-
-        PersistedSnapshot compacted = repo.PersistCompactedSnapshot(s0, s2, merged, [base1.Id]);
-
-        // Compacted snapshot should have bloom and find both accounts
-        Assert.That(compacted.Bloom, Is.Not.Null);
-        Assert.That(compacted.TryGetAccount(TestItem.AddressA), Is.Not.Null);
-        Assert.That(compacted.TryGetAccount(TestItem.AddressB), Is.Not.Null);
-        Assert.That(compacted.TryGetAccount(TestItem.AddressC), Is.Null);
-    }
 
     [Test]
     public async Task FlatDbManager_EndToEnd_WithPersistedSnapshots()
@@ -375,7 +317,5 @@ public class LongFinalityIntegrationTests
         Assert.That(config.LongFinalityReorgDepth, Is.EqualTo(90000));
         Assert.That(config.PersistedSnapshotPath, Is.EqualTo("snapshots"));
         Assert.That(config.ArenaFileSizeBytes, Is.EqualTo(4L * 1024 * 1024 * 1024));
-        Assert.That(config.EnableBloomFilters, Is.True);
-        Assert.That(config.BloomFilterBitsPerKey, Is.EqualTo(10.0));
     }
 }
