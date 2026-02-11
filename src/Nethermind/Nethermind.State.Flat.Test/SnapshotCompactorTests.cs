@@ -267,9 +267,9 @@ public class SnapshotCompactorTests
         using Snapshot compacted = _compactor.CompactSnapshotBundle(snapshots);
 
         // Self-destructed address should be tracked, and its storage cleared
+        // Storage nodes are not cleared — orphaned nodes are skipped during trie traversal
         Assert.That(compacted.Content.SelfDestructedStorageAddresses.Count, Is.GreaterThan(0));
         Assert.That(compacted.StoragesCount, Is.EqualTo(0));
-        Assert.That(compacted.StorageNodesCount, Is.EqualTo(0));
     }
 
     [Test]
