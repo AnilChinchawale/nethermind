@@ -53,6 +53,10 @@ public static class PersistedSnapshotBuilder
         }
         accounts.Sort((a, b) => a.Key.Value.Bytes.SequenceCompareTo(b.Key.Value.Bytes));
 
+        // Reusable buffer for account RLP encoding — avoids per-account allocation
+        byte[] rlpBuffer = new byte[256];
+        RlpStream rlpStream = new(rlpBuffer);
+
         foreach ((AddressAsKey key, Account? value) in accounts)
         {
             int keyLen = 1 + Address.Size;
@@ -65,8 +69,10 @@ public static class PersistedSnapshotBuilder
             }
             else
             {
-                using NettyRlpStream stream = AccountDecoder.Slim.EncodeToNewNettyStream(value);
-                builder.Add(keyBuffer.AsSpan(0, keyLen), stream.AsSpan());
+                int len = AccountDecoder.Slim.GetLength(value);
+                rlpStream.Reset();
+                AccountDecoder.Slim.Encode(rlpStream, value);
+                builder.Add(keyBuffer.AsSpan(0, keyLen), rlpBuffer.AsSpan(0, len));
             }
         }
     }

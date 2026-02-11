@@ -77,4 +77,22 @@ public static class Leb128
         while (v != 0);
         return size;
     }
+
+    /// <summary>
+    /// Write LEB128 padded to exactly <paramref name="targetLength"/> bytes.
+    /// All bytes except the last have the continuation bit set.
+    /// The standard LEB128 decoder handles this correctly.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int WritePadded(Span<byte> data, int offset, int value, int targetLength)
+    {
+        uint v = (uint)value;
+        for (int i = 0; i < targetLength - 1; i++)
+        {
+            data[offset++] = (byte)(v | 0x80);
+            v >>= 7;
+        }
+        data[offset++] = (byte)(v & 0x7F);
+        return offset;
+    }
 }

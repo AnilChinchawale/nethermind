@@ -20,7 +20,27 @@ public sealed class RsstBuilder
     private byte[]? _lastKey;
     private int _leafEntryCount;
 
+    // State for BeginLargeEntry/FinishEntry
+    private int _pendingValueLebPosition = -1;
+    private int _pendingValueStart = -1;
+    private int _pendingLebLength;
+
     public int EntryCount => _entryOffsets.Count;
+
+    private void TrackLeafBoundary(ReadOnlySpan<byte> key)
+    {
+        if (_leafEntryCount == 0)
+            _firstKeys.Add(key.ToArray());
+        _leafEntryCount++;
+
+        byte[] currentKey = key.ToArray();
+        if (_leafEntryCount >= Rsst.MaxLeafEntries)
+        {
+            _lastKeys.Add(currentKey);
+            _leafEntryCount = 0;
+        }
+        _lastKey = currentKey;
+    }
 
     /// <summary>
     /// Add an entry with pre-allocated value space. Returns a span where the caller writes the value directly.
@@ -31,21 +51,7 @@ public sealed class RsstBuilder
         int offset = (int)_dataStream.Position;
         _entryOffsets.Add(offset);
 
-        // Track leaf boundaries
-        if (_leafEntryCount == 0)
-        {
-            _firstKeys.Add(key.ToArray());
-        }
-        _leafEntryCount++;
-
-        byte[] currentKey = key.ToArray();
-        if (_leafEntryCount >= Rsst.MaxLeafEntries)
-        {
-            _lastKeys.Add(currentKey);
-            _leafEntryCount = 0;
-        }
-
-        _lastKey = currentKey;
+        TrackLeafBoundary(key);
 
         // Write key
         Span<byte> leb = stackalloc byte[5];
@@ -72,6 +78,54 @@ public sealed class RsstBuilder
     {
         Span<byte> dest = AddEntry(key, value.Length);
         value.CopyTo(dest);
+    }
+
+    /// <summary>
+    /// Begin a large entry where the exact value size is not known upfront.
+    /// Returns a span of <paramref name="maxValueLength"/> bytes for the caller to write into.
+    /// Call <see cref="FinishEntry"/> with the actual size after writing.
+    /// The value LEB128 is padded so FinishEntry can rewrite it in-place without shifting data.
+    /// </summary>
+    public Span<byte> BeginLargeEntry(ReadOnlySpan<byte> key, int maxValueLength)
+    {
+        int offset = (int)_dataStream.Position;
+        _entryOffsets.Add(offset);
+
+        TrackLeafBoundary(key);
+
+        // Write key
+        Span<byte> leb = stackalloc byte[5];
+        int lebLen = Leb128.Write(leb, 0, key.Length);
+        _dataStream.Write(leb[..lebLen]);
+        _dataStream.Write(key);
+
+        // Write value LEB128 padded to max size so FinishEntry can rewrite in-place
+        _pendingLebLength = Leb128.EncodedSize(maxValueLength);
+        _pendingValueLebPosition = (int)_dataStream.Position;
+        Span<byte> paddedLeb = stackalloc byte[5];
+        Leb128.WritePadded(paddedLeb, 0, maxValueLength, _pendingLebLength);
+        _dataStream.Write(paddedLeb[.._pendingLebLength]);
+
+        // Reserve space for value and return span
+        _pendingValueStart = (int)_dataStream.Position;
+        _dataStream.SetLength(Math.Max(_dataStream.Length, _pendingValueStart + maxValueLength));
+        _dataStream.Position = _pendingValueStart + maxValueLength;
+
+        return _dataStream.GetBuffer().AsSpan(_pendingValueStart, maxValueLength);
+    }
+
+    /// <summary>
+    /// Finish a large entry started with <see cref="BeginLargeEntry"/>.
+    /// Rewrites the value LEB128 with the actual size (padded to same byte count).
+    /// </summary>
+    public void FinishEntry(int actualSize)
+    {
+        // Rewrite LEB128 in-place with actual size, padded to same byte count
+        Leb128.WritePadded(_dataStream.GetBuffer().AsSpan(), _pendingValueLebPosition, actualSize, _pendingLebLength);
+
+        // Adjust stream position to end of actual data
+        _dataStream.Position = _pendingValueStart + actualSize;
+        _pendingValueLebPosition = -1;
     }
 
     public byte[] Build()
