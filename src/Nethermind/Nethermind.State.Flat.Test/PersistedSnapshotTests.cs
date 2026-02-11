@@ -87,24 +87,24 @@ public class PersistedSnapshotTests
         Snapshot snapshot = CreateTestSnapshot(from, to, storages: [(addr, slot, value)]);
         byte[] data = PersistedSnapshotBuilder.Build(snapshot);
 
-        // Verify RSST content directly
-        Rsst.Rsst rsst = new(data);
-        Assert.That(rsst.EntryCount, Is.EqualTo(1), "RSST should have 1 entry");
+        // Verify outer RSST has 5 columns
+        Rsst.Rsst outerRsst = new(data);
+        Assert.That(outerRsst.EntryCount, Is.EqualTo(5), "Outer RSST should have 5 column entries");
 
-        // Build lookup key the same way PersistedSnapshot does
-        byte[] lookupKey = new byte[1 + Address.Size + 32];
-        lookupKey[0] = PersistedSnapshot.StorageTag;
-        addr.Bytes.CopyTo(lookupKey.AsSpan(1));
-        slot.ToBigEndian(lookupKey.AsSpan(1 + Address.Size));
+        // Verify the storage column inner RSST has 1 entry
+        Assert.That(outerRsst.TryGet([PersistedSnapshot.StorageTag], out ReadOnlySpan<byte> storageColumn), Is.True);
+        Rsst.Rsst innerRsst = new(storageColumn);
+        Assert.That(innerRsst.EntryCount, Is.EqualTo(1), "Storage inner RSST should have 1 entry");
 
-        // Enumerate to see what key is actually stored
-        foreach (Rsst.Rsst.KeyValueEntry entry in rsst)
+        // Build entity key (address + slot, without tag prefix)
+        byte[] entityKey = new byte[Address.Size + 32];
+        addr.Bytes.CopyTo(entityKey.AsSpan());
+        slot.ToBigEndian(entityKey.AsSpan(Address.Size));
+
+        // Verify inner RSST key matches entity key
+        foreach (Rsst.Rsst.KeyValueEntry entry in innerRsst)
         {
-            byte[] storedKey = entry.Key.ToArray();
-            Assert.That(storedKey.Length, Is.EqualTo(lookupKey.Length),
-                $"Key lengths differ. Stored: {storedKey.Length}, Lookup: {lookupKey.Length}");
-            Assert.That(storedKey, Is.EqualTo(lookupKey),
-                $"Keys differ.\nStored: {BitConverter.ToString(storedKey)}\nLookup: {BitConverter.ToString(lookupKey)}");
+            Assert.That(entry.Key.ToArray(), Is.EqualTo(entityKey));
         }
 
         PersistedSnapshot persisted = new(1, from, to, PersistedSnapshotType.Base, data);

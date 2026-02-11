@@ -225,4 +225,77 @@ public class RsstTests
         Assert.That(rsst.EntryCount, Is.EqualTo(2));
     }
 
+    [Test]
+    public void NestedRsst_RoundTrip()
+    {
+        // Build inner RSST
+        RsstBuilder innerBuilder = new();
+        innerBuilder.Add([0x01, 0x02], [0xAA, 0xBB]);
+        byte[] innerData = innerBuilder.Build();
+
+        // Store as value in outer RSST
+        RsstBuilder outerBuilder = new();
+        outerBuilder.Add([0x00], innerData);
+        byte[] outerData = outerBuilder.Build();
+
+        // Read outer RSST
+        Rsst.Rsst outer = new(outerData);
+        Assert.That(outer.EntryCount, Is.EqualTo(1));
+        Assert.That(outer.TryGet([0x00], out ReadOnlySpan<byte> columnData), Is.True);
+
+        // columnData should be innerData
+        Assert.That(columnData.ToArray(), Is.EqualTo(innerData), "Inner RSST bytes mismatch");
+
+        // Read inner RSST from columnData
+        Rsst.Rsst inner = new(columnData);
+        Assert.That(inner.EntryCount, Is.EqualTo(1));
+        Assert.That(inner.TryGet([0x01, 0x02], out ReadOnlySpan<byte> value), Is.True);
+        Assert.That(value.ToArray(), Is.EqualTo(new byte[] { 0xAA, 0xBB }));
+    }
+
+    [Test]
+    public void NestedRsst_MultipleColumns_RoundTrip()
+    {
+        // Simulate the columnar design: 5 columns with 1-byte tags
+        byte[] addr = new byte[20];
+        addr[0] = 0xAB;
+        addr[19] = 0xCD;
+        byte[] accountRlp = new byte[50];
+        accountRlp[0] = 0xC0;
+        for (int i = 1; i < 50; i++) accountRlp[i] = (byte)(i & 0xFF);
+
+        // Build inner account RSST
+        RsstBuilder accountBuilder = new();
+        accountBuilder.Add(addr, accountRlp);
+        byte[] accountsInner = accountBuilder.Build();
+
+        // Build empty inner RSSTs for other columns
+        byte[] emptyInner = new RsstBuilder().Build();
+
+        // Build outer RSST with 5 columns
+        RsstBuilder outerBuilder = new();
+        outerBuilder.Add([0x00], accountsInner);
+        outerBuilder.Add([0x01], emptyInner);
+        outerBuilder.Add([0x02], emptyInner);
+        outerBuilder.Add([0x03], emptyInner);
+        outerBuilder.Add([0x04], emptyInner);
+        byte[] outerData = outerBuilder.Build();
+
+        // Read outer RSST
+        Rsst.Rsst outer = new(outerData);
+        Assert.That(outer.EntryCount, Is.EqualTo(5));
+
+        // Look up accounts column
+        Assert.That(outer.TryGet([0x00], out ReadOnlySpan<byte> columnData), Is.True);
+        Assert.That(columnData.Length, Is.EqualTo(accountsInner.Length),
+            $"Column data length {columnData.Length} != accounts inner {accountsInner.Length}");
+        Assert.That(columnData.ToArray(), Is.EqualTo(accountsInner), "Column data mismatch");
+
+        // Parse inner RSST
+        Rsst.Rsst inner = new(columnData);
+        Assert.That(inner.EntryCount, Is.EqualTo(1));
+        Assert.That(inner.TryGet(addr, out ReadOnlySpan<byte> value), Is.True);
+        Assert.That(value.ToArray(), Is.EqualTo(accountRlp));
+    }
+
 }

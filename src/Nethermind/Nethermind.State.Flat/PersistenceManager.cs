@@ -365,9 +365,46 @@ public class PersistenceManager(
     }
 
     /// <summary>
-    /// Merge two RSST snapshots' data using streaming merge-sort.
-    /// Newer entries override older ones when keys match.
+    /// Merge two columnar RSST snapshots by merging each column's inner RSST independently.
+    /// Newer entries override older ones when keys match within each column.
     /// </summary>
-    internal static byte[] MergeSnapshotData(ReadOnlyMemory<byte> olderData, ReadOnlyMemory<byte> newerData) =>
-        RsstBuilder.StreamingMerge(olderData.Span, newerData.Span);
+    internal static byte[] MergeSnapshotData(ReadOnlyMemory<byte> olderData, ReadOnlyMemory<byte> newerData)
+    {
+        ReadOnlySpan<byte> olderSpan = olderData.Span;
+        ReadOnlySpan<byte> newerSpan = newerData.Span;
+
+        Rsst.Rsst olderOuter = new(olderSpan);
+        Rsst.Rsst newerOuter = new(newerSpan);
+
+        Rsst.RsstBuilder outerBuilder = new();
+        ReadOnlySpan<byte> tags = [
+            PersistedSnapshot.AccountTag,
+            PersistedSnapshot.StorageTag,
+            PersistedSnapshot.SelfDestructTag,
+            PersistedSnapshot.StateNodeTag,
+            PersistedSnapshot.StorageNodeTag
+        ];
+
+        Span<byte> tagKey = stackalloc byte[1];
+        foreach (byte tag in tags)
+        {
+            tagKey[0] = tag;
+            bool hasOlder = olderOuter.TryGet(tagKey, out ReadOnlySpan<byte> olderColumn);
+            bool hasNewer = newerOuter.TryGet(tagKey, out ReadOnlySpan<byte> newerColumn);
+
+            byte[] mergedColumn;
+            if (hasOlder && hasNewer)
+                mergedColumn = Rsst.RsstBuilder.StreamingMerge(olderColumn, newerColumn);
+            else if (hasNewer)
+                mergedColumn = newerColumn.ToArray();
+            else if (hasOlder)
+                mergedColumn = olderColumn.ToArray();
+            else
+                mergedColumn = new Rsst.RsstBuilder().Build();
+
+            outerBuilder.Add(tagKey, mergedColumn);
+        }
+
+        return outerBuilder.Build();
+    }
 }

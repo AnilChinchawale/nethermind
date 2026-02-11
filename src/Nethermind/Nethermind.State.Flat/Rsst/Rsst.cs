@@ -285,11 +285,31 @@ public readonly ref struct Rsst
             ushort possibleSize = BinaryPrimitives.ReadUInt16LittleEndian(indexRegion[tryStart..]);
             if (tryStart + possibleSize == indexRegion.Length && possibleSize >= 6)
             {
-                return NodeHeader.Read(indexRegion[tryStart..]);
+                NodeHeader header = NodeHeader.Read(indexRegion[tryStart..]);
+                if (!ValidateNodeSize(header, possibleSize)) continue;
+                return header;
             }
         }
 
         return NodeHeader.Read(indexRegion);
+    }
+
+    /// <summary>
+    /// Validate that the declared nodeSize matches the expected size computed from header fields.
+    /// For uniform formats, the size is deterministic. For variable format, apply minimum size check.
+    /// </summary>
+    private static bool ValidateNodeSize(NodeHeader header, int declaredSize)
+    {
+        if (header.Format != 0)
+        {
+            int offsetBytes = header.Format == 1 ? 3 : 2;
+            int expectedSize = header.HeaderSize + header.EntryCount * (header.SepLen + offsetBytes);
+            return expectedSize == declaredSize;
+        }
+
+        // Variable format: minimum is header + offset table
+        int minSize = header.HeaderSize + header.EntryCount * 2;
+        return minSize <= declaredSize;
     }
 
     /// <summary>

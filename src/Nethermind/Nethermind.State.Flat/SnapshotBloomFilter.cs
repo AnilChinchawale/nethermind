@@ -64,15 +64,36 @@ public sealed class SnapshotBloomFilter
     }
 
     /// <summary>
-    /// Build a bloom filter from RSST data by enumerating all entry keys.
+    /// Build a bloom filter from columnar RSST data by enumerating all inner RSST keys.
+    /// Bloom keys are [column tag byte] + [entity key] for uniqueness across columns.
     /// </summary>
     public static SnapshotBloomFilter BuildFromRsst(ReadOnlySpan<byte> rsstData, double bitsPerKey = DefaultBitsPerKey)
     {
-        Rsst.Rsst rsst = new(rsstData);
-        SnapshotBloomFilter bloom = new(rsst.EntryCount, bitsPerKey);
-        foreach (Rsst.Rsst.KeyValueEntry entry in rsst)
+        Rsst.Rsst outer = new(rsstData);
+
+        // Count total entries across all inner RSSTs
+        int totalEntries = 0;
+        foreach (Rsst.Rsst.KeyValueEntry column in outer)
         {
-            bloom.Add(entry.Key);
+            Rsst.Rsst inner = new(column.Value);
+            totalEntries += inner.EntryCount;
+        }
+
+        SnapshotBloomFilter bloom = new(totalEntries, bitsPerKey);
+
+        // Add all inner keys with column tag prefix for uniqueness
+        // Max key: 1 (tag) + 65 (storage node: 32 addr + 32 path + 1 len) = 66 bytes
+        Span<byte> bloomKey = stackalloc byte[66];
+        foreach (Rsst.Rsst.KeyValueEntry column in outer)
+        {
+            Rsst.Rsst inner = new(column.Value);
+            foreach (Rsst.Rsst.KeyValueEntry entry in inner)
+            {
+                int bloomKeyLen = column.Key.Length + entry.Key.Length;
+                column.Key.CopyTo(bloomKey);
+                entry.Key.CopyTo(bloomKey[column.Key.Length..]);
+                bloom.Add(bloomKey[..bloomKeyLen]);
+            }
         }
 
         return bloom;

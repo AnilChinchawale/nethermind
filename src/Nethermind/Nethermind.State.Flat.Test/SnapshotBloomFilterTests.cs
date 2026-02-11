@@ -94,11 +94,19 @@ public class SnapshotBloomFilterTests
 
         SnapshotBloomFilter bloom = SnapshotBloomFilter.BuildFromRsst(rsstData);
 
-        // Verify all RSST keys are in the bloom
-        Rsst.Rsst rsst = new(rsstData);
-        foreach (Rsst.Rsst.KeyValueEntry entry in rsst)
+        // Verify all inner RSST keys (with column prefix) are in the bloom
+        Rsst.Rsst outerRsst = new(rsstData);
+        foreach (Rsst.Rsst.KeyValueEntry column in outerRsst)
         {
-            Assert.That(bloom.MightContain(entry.Key), Is.True);
+            Rsst.Rsst innerRsst = new(column.Value);
+            foreach (Rsst.Rsst.KeyValueEntry entry in innerRsst)
+            {
+                byte[] bloomKey = new byte[column.Key.Length + entry.Key.Length];
+                column.Key.CopyTo(bloomKey);
+                entry.Key.CopyTo(bloomKey.AsSpan(column.Key.Length));
+                Assert.That(bloom.MightContain(bloomKey), Is.True,
+                    $"Bloom filter missing key for column 0x{column.Key[0]:X2}");
+            }
         }
     }
 

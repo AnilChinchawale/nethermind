@@ -12,15 +12,14 @@ using Nethermind.Trie;
 namespace Nethermind.State.Flat.PersistedSnapshots;
 
 /// <summary>
-/// A persisted snapshot backed by RSST data on disk (or in memory).
-/// Provides typed access to accounts, storage, self-destruct markers, and trie nodes.
-///
-/// Key encoding uses a tag prefix for sorting and grouping:
-///   Tag 0x00 + Address (20 bytes) → Account RLP
-///   Tag 0x01 + Address (20 bytes) + UInt256 slot (32 bytes big-endian) → Slot value bytes
-///   Tag 0x02 + Address (20 bytes) → Self-destruct marker (empty value)
-///   Tag 0x03 + TreePath.Path (32 bytes) + PathLength (1 byte) → State trie node RLP
-///   Tag 0x04 + AddressHash (32 bytes) + TreePath.Path (32 bytes) + PathLength (1 byte) → Storage trie node RLP
+/// A persisted snapshot backed by columnar RSST data on disk (or in memory).
+/// The outer RSST has 5 column entries (tags 0x00-0x04), each containing an inner RSST.
+/// Inner RSST keys are the entity keys without the tag prefix:
+///   Column 0x00: Address (20 bytes) → Account RLP
+///   Column 0x01: Address (20 bytes) + UInt256 slot (32 bytes big-endian) → Slot value bytes
+///   Column 0x02: Address (20 bytes) → Self-destruct marker
+///   Column 0x03: TreePath.Path (32 bytes) + PathLength (1 byte) → State trie node RLP
+///   Column 0x04: AddressHash (32 bytes) + TreePath.Path (32 bytes) + PathLength (1 byte) → Storage trie node RLP
 /// </summary>
 public sealed class PersistedSnapshot : RefCountingDisposable
 {
@@ -61,39 +60,33 @@ public sealed class PersistedSnapshot : RefCountingDisposable
 
     public byte[]? TryGetAccount(Address address)
     {
-        Span<byte> key = stackalloc byte[1 + Address.Size];
-        key[0] = AccountTag;
-        address.Bytes.CopyTo(key[1..]);
+        Span<byte> bloomKey = stackalloc byte[1 + Address.Size];
+        bloomKey[0] = AccountTag;
+        address.Bytes.CopyTo(bloomKey[1..]);
+        if (!BloomCheck(bloomKey)) return null;
 
-        if (!BloomCheck(key)) return null;
-
-        Rsst.Rsst rsst = new(_data.Span);
-        return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
+        return TryGetFromColumn(AccountTag, address.Bytes);
     }
 
     public byte[]? TryGetSlot(Address address, in UInt256 index)
     {
-        Span<byte> key = stackalloc byte[1 + Address.Size + 32];
-        key[0] = StorageTag;
-        address.Bytes.CopyTo(key[1..]);
-        index.ToBigEndian(key.Slice(1 + Address.Size, 32));
+        Span<byte> bloomKey = stackalloc byte[1 + Address.Size + 32];
+        bloomKey[0] = StorageTag;
+        address.Bytes.CopyTo(bloomKey[1..]);
+        index.ToBigEndian(bloomKey.Slice(1 + Address.Size, 32));
+        if (!BloomCheck(bloomKey)) return null;
 
-        if (!BloomCheck(key)) return null;
-
-        Rsst.Rsst rsst = new(_data.Span);
-        return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
+        return TryGetFromColumn(StorageTag, bloomKey[1..]);
     }
 
     public bool IsSelfDestructed(Address address)
     {
-        Span<byte> key = stackalloc byte[1 + Address.Size];
-        key[0] = SelfDestructTag;
-        address.Bytes.CopyTo(key[1..]);
+        Span<byte> bloomKey = stackalloc byte[1 + Address.Size];
+        bloomKey[0] = SelfDestructTag;
+        address.Bytes.CopyTo(bloomKey[1..]);
+        if (!BloomCheck(bloomKey)) return false;
 
-        if (!BloomCheck(key)) return false;
-
-        Rsst.Rsst rsst = new(_data.Span);
-        return rsst.TryGet(key, out _);
+        return TryGetFromColumn(SelfDestructTag, address.Bytes) is not null;
     }
 
     /// <summary>
@@ -103,42 +96,49 @@ public sealed class PersistedSnapshot : RefCountingDisposable
     /// </summary>
     public bool? TryGetSelfDestructFlag(Address address)
     {
-        Span<byte> key = stackalloc byte[1 + Address.Size];
-        key[0] = SelfDestructTag;
-        address.Bytes.CopyTo(key[1..]);
+        Span<byte> bloomKey = stackalloc byte[1 + Address.Size];
+        bloomKey[0] = SelfDestructTag;
+        address.Bytes.CopyTo(bloomKey[1..]);
+        if (!BloomCheck(bloomKey)) return null;
 
-        if (!BloomCheck(key)) return null;
-
-        Rsst.Rsst rsst = new(_data.Span);
-        if (!rsst.TryGet(key, out ReadOnlySpan<byte> value)) return null;
-        return value.Length > 0 && value[0] == 0x01;
+        byte[]? result = TryGetFromColumn(SelfDestructTag, address.Bytes);
+        if (result is null) return null;
+        return result.Length > 0 && result[0] == 0x01;
     }
 
     public byte[]? TryLoadStateNodeRlp(in TreePath path)
     {
-        Span<byte> key = stackalloc byte[1 + 32 + 1];
-        key[0] = StateNodeTag;
-        path.Path.Bytes.CopyTo(key[1..]);
-        key[33] = (byte)path.Length;
+        Span<byte> bloomKey = stackalloc byte[1 + 32 + 1];
+        bloomKey[0] = StateNodeTag;
+        path.Path.Bytes.CopyTo(bloomKey[1..]);
+        bloomKey[33] = (byte)path.Length;
+        if (!BloomCheck(bloomKey)) return null;
 
-        if (!BloomCheck(key)) return null;
-
-        Rsst.Rsst rsst = new(_data.Span);
-        return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
+        return TryGetFromColumn(StateNodeTag, bloomKey[1..]);
     }
 
     public byte[]? TryLoadStorageNodeRlp(Hash256 address, in TreePath path)
     {
-        Span<byte> key = stackalloc byte[1 + 32 + 32 + 1];
-        key[0] = StorageNodeTag;
-        address.Bytes.CopyTo(key[1..]);
-        path.Path.Bytes.CopyTo(key[33..]);
-        key[65] = (byte)path.Length;
+        Span<byte> bloomKey = stackalloc byte[1 + 32 + 32 + 1];
+        bloomKey[0] = StorageNodeTag;
+        address.Bytes.CopyTo(bloomKey[1..]);
+        path.Path.Bytes.CopyTo(bloomKey[33..]);
+        bloomKey[65] = (byte)path.Length;
+        if (!BloomCheck(bloomKey)) return null;
 
-        if (!BloomCheck(key)) return null;
+        return TryGetFromColumn(StorageNodeTag, bloomKey[1..]);
+    }
 
-        Rsst.Rsst rsst = new(_data.Span);
-        return rsst.TryGet(key, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
+    private byte[]? TryGetFromColumn(byte tag, ReadOnlySpan<byte> entityKey)
+    {
+        Rsst.Rsst outer = new(_data.Span);
+        Span<byte> tagKey = stackalloc byte[1];
+        tagKey[0] = tag;
+        if (!outer.TryGet(tagKey, out ReadOnlySpan<byte> columnData))
+            return null;
+
+        Rsst.Rsst inner = new(columnData);
+        return inner.TryGet(entityKey, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
