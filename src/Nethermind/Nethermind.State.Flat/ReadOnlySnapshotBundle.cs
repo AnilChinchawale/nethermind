@@ -23,7 +23,7 @@ public sealed class ReadOnlySnapshotBundle(
     SnapshotPooledList snapshots,
     IPersistence.IPersistenceReader persistenceReader,
     bool recordDetailedMetrics,
-    PersistedSnapshotList? persistedSnapshots = null)
+    PersistedSnapshotList persistedSnapshots)
     : RefCountingDisposable
 {
     public int SnapshotCount => snapshots.Count;
@@ -61,18 +61,15 @@ public sealed class ReadOnlySnapshotBundle(
         }
 
         // Check persisted snapshots (newest-first)
-        if (persistedSnapshots is not null)
+        long psw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
+        for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
         {
-            long psw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
-            for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
+            byte[]? rlp = persistedSnapshots[i].TryGetAccount(address);
+            if (rlp is not null)
             {
-                byte[]? rlp = persistedSnapshots[i].TryGetAccount(address);
-                if (rlp is not null)
-                {
-                    if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readAccountPersistedLabel);
-                    Rlp.ValueDecoderContext ctx = new(rlp);
-                    return AccountDecoder.Slim.Decode(ref ctx);
-                }
+                if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readAccountPersistedLabel);
+                Rlp.ValueDecoderContext ctx = new(rlp);
+                return AccountDecoder.Slim.Decode(ref ctx);
             }
         }
 
@@ -124,24 +121,20 @@ public sealed class ReadOnlySnapshotBundle(
         }
 
         // Check persisted snapshots (newest-first) with self-destruct boundary
-        if (persistedSnapshots is not null)
+        for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
         {
-            long psw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
-            for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
+            byte[]? value = persistedSnapshots[i].TryGetSlot(address, index);
+            if (value is not null)
             {
-                byte[]? value = persistedSnapshots[i].TryGetSlot(address, index);
-                if (value is not null)
-                {
-                    if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readStoragePersistedLabel);
-                    return value;
-                }
+                if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - sw, _readStoragePersistedLabel);
+                return value;
+            }
 
-                // Check self-destruct boundary: if destructed (false flag), storage was cleared
-                bool? selfDestructFlag = persistedSnapshots[i].TryGetSelfDestructFlag(address);
-                if (selfDestructFlag.HasValue && !selfDestructFlag.Value)
-                {
-                    return null;
-                }
+            // Check self-destruct boundary: if destructed (false flag), storage was cleared
+            bool? selfDestructFlag = persistedSnapshots[i].TryGetSelfDestructFlag(address);
+            if (selfDestructFlag.HasValue && !selfDestructFlag.Value)
+            {
+                return null;
             }
         }
 
@@ -210,22 +203,19 @@ public sealed class ReadOnlySnapshotBundle(
     {
         GuardDispose();
 
-        if (persistedSnapshots is not null)
+        long sw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
+        for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
         {
-            long psw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
-            for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
+            byte[]? rlp = persistedSnapshots[i].TryLoadStateNodeRlp(path);
+            if (rlp is not null)
             {
-                byte[]? rlp = persistedSnapshots[i].TryLoadStateNodeRlp(path);
-                if (rlp is not null)
-                {
-                    if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readStateRlpPersistedLabel);
-                    return rlp;
-                }
+                if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - sw, _readStateRlpPersistedLabel);
+                return rlp;
             }
         }
 
         Nethermind.Trie.Pruning.Metrics.LoadedFromDbNodesCount++;
-        long sw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
+        sw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
         byte[]? value = persistenceReader.TryLoadStateRlp(path, flags);
         if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - sw, _readStateRlpLabel);
 
@@ -236,22 +226,19 @@ public sealed class ReadOnlySnapshotBundle(
     {
         GuardDispose();
 
-        if (persistedSnapshots is not null)
+        long sw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
+        for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
         {
-            long psw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
-            for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
+            byte[]? rlp = persistedSnapshots[i].TryLoadStorageNodeRlp(address, path);
+            if (rlp is not null)
             {
-                byte[]? rlp = persistedSnapshots[i].TryLoadStorageNodeRlp(address, path);
-                if (rlp is not null)
-                {
-                    if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readStorageRlpPersistedLabel);
-                    return rlp;
-                }
+                if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - sw, _readStorageRlpPersistedLabel);
+                return rlp;
             }
         }
 
         Nethermind.Trie.Pruning.Metrics.LoadedFromDbNodesCount++;
-        long sw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
+        sw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
         byte[]? value = persistenceReader.TryLoadStorageRlp(address, path, flags);
         if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - sw, _readStorageRlpLabel);
 
@@ -270,7 +257,7 @@ public sealed class ReadOnlySnapshotBundle(
         if (Interlocked.CompareExchange(ref _isDisposed, true, false)) return;
 
         snapshots.Dispose();
-        persistedSnapshots?.Dispose();
+        persistedSnapshots.Dispose();
 
         // Null them in case unexpected mutation from trie warmer
         persistenceReader.Dispose();

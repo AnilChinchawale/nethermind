@@ -55,7 +55,8 @@ public class FlatDbManagerTests
         _persistenceManager,
         _config,
         LimboLogs.Instance,
-        enableDetailedMetrics: false);
+        enableDetailedMetrics: false,
+        Substitute.For<IPersistedSnapshotRepository>());
 
     private static StateId CreateStateId(long blockNumber, byte rootByte = 0)
     {

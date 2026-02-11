@@ -27,7 +27,7 @@ public class FlatDbManager : IFlatDbManager, IAsyncDisposable
     private readonly ISnapshotRepository _snapshotRepository;
     private readonly ITrieNodeCache _trieNodeCache;
     private readonly IResourcePool _resourcePool;
-    private readonly IPersistedSnapshotRepository? _persistedSnapshotRepository;
+    private readonly IPersistedSnapshotRepository _persistedSnapshotRepository;
 
     // Cache for assembling `ReadOnlySnapshotBundle`. Its not actually slow, but its called 1.8k per sec so caching
     // it save a decent amount of CPU.
@@ -66,7 +66,7 @@ public class FlatDbManager : IFlatDbManager, IAsyncDisposable
         IFlatDbConfig config,
         ILogManager logManager,
         bool enableDetailedMetrics,
-        IPersistedSnapshotRepository? persistedSnapshotRepository = null)
+        IPersistedSnapshotRepository persistedSnapshotRepository)
     {
         _trieNodeCache = trieNodeCache;
         _snapshotCompactor = snapshotCompactor;
@@ -237,7 +237,7 @@ public class FlatDbManager : IFlatDbManager, IAsyncDisposable
         if (baseBlock == StateId.PreGenesis)
         {
             // Special case for pregenesis. Note: nethermind always tries to generate genesis.
-            return new ReadOnlySnapshotBundle(new SnapshotPooledList(0), new NoopPersistenceReader(), _enableDetailedMetrics);
+            return new ReadOnlySnapshotBundle(new SnapshotPooledList(0), new NoopPersistenceReader(), _enableDetailedMetrics, PersistedSnapshotList.Empty);
         }
 
         long sw = 0;
@@ -298,7 +298,7 @@ public class FlatDbManager : IFlatDbManager, IAsyncDisposable
 
             if (_logger.IsTrace) _logger.Trace($"Gathered {baseBlock}. Got {snapshots.Count} known states, Reader state: {persistenceReader.CurrentState}. Persistence state: {_persistenceManager.GetCurrentPersistedStateId()}");
 
-            PersistedSnapshotList? persistedList = _persistedSnapshotRepository?.CompileSnapshotList();
+            PersistedSnapshotList persistedList = _persistedSnapshotRepository.CompileSnapshotList();
             ReadOnlySnapshotBundle res = new(snapshots, persistenceReader, _enableDetailedMetrics, persistedList);
 
             res.TryLease();
@@ -407,7 +407,7 @@ public class FlatDbManager : IFlatDbManager, IAsyncDisposable
         await _populateTrieNodeCacheTask;
         await _persistenceTask;
 
-        _persistedSnapshotRepository?.Dispose();
+        _persistedSnapshotRepository.Dispose();
         _cancelTokenSource.Dispose();
     }
 }

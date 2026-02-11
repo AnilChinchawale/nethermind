@@ -130,11 +130,12 @@ public class ReadOnlySnapshotBundlePersistedTests
         IPersistence.IPersistenceReader reader = Substitute.For<IPersistence.IPersistenceReader>();
         reader.TryLoadStateRlp(Arg.Any<TreePath>(), Arg.Any<ReadFlags>()).Returns(dbRlp);
 
-        // No persisted snapshots
+        // Empty persisted snapshots list
         using ReadOnlySnapshotBundle bundle = new(
             new SnapshotPooledList(0),
             reader,
-            recordDetailedMetrics: false);
+            recordDetailedMetrics: false,
+            persistedSnapshots: PersistedSnapshotList.Empty);
 
         byte[]? result = bundle.TryLoadStateRlp(path, Keccak.Compute("hash"), ReadFlags.None);
 
