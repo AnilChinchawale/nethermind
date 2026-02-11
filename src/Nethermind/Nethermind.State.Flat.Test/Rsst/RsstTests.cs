@@ -38,7 +38,7 @@ public class RsstTests
     public void Empty_Rsst_HasZeroEntries()
     {
         RsstBuilder builder = new();
-        byte[] data = builder.Build();
+        byte[] data = builder.BuildToArray();
 
         Rsst.Rsst rsst = new(data);
         Assert.That(rsst.EntryCount, Is.EqualTo(0));
@@ -50,7 +50,7 @@ public class RsstTests
     {
         RsstBuilder builder = new();
         builder.Add("key1"u8, "value1"u8);
-        byte[] data = builder.Build();
+        byte[] data = builder.BuildToArray();
 
         Rsst.Rsst rsst = new(data);
         Assert.That(rsst.EntryCount, Is.EqualTo(1));
@@ -82,7 +82,7 @@ public class RsstTests
             builder.Add(Encoding.UTF8.GetBytes(key), Encoding.UTF8.GetBytes(value));
         }
 
-        byte[] data = builder.Build();
+        byte[] data = builder.BuildToArray();
         Rsst.Rsst rsst = new(data);
         Assert.That(rsst.EntryCount, Is.EqualTo(count));
 
@@ -115,7 +115,7 @@ public class RsstTests
             builder.Add(Encoding.UTF8.GetBytes(key), Encoding.UTF8.GetBytes($"val_{i}"));
         }
 
-        byte[] data = builder.Build();
+        byte[] data = builder.BuildToArray();
         Rsst.Rsst rsst = new(data);
 
         expectedKeys.Sort(StringComparer.Ordinal);
@@ -147,7 +147,7 @@ public class RsstTests
         for (int i = 0; i < longKey.Length; i++) longKey[i] = (byte)'c';
         builder.Add(longKey, "x"u8);
 
-        byte[] data = builder.Build();
+        byte[] data = builder.BuildToArray();
         Rsst.Rsst rsst = new(data);
         Assert.That(rsst.EntryCount, Is.EqualTo(3));
 
@@ -200,7 +200,7 @@ public class RsstTests
             builder.Add(key, BitConverter.GetBytes(index));
         }
 
-        byte[] data = builder.Build();
+        byte[] data = builder.BuildToArray();
         Rsst.Rsst rsst = new(data);
         Assert.That(rsst.EntryCount, Is.EqualTo(100));
 
@@ -218,7 +218,7 @@ public class RsstTests
         builder.Add("key"u8, "value1"u8);
         builder.Add("key"u8, "value2"u8);
 
-        byte[] data = builder.Build();
+        byte[] data = builder.BuildToArray();
         Rsst.Rsst rsst = new(data);
 
         // Both entries are stored but TryGet returns the first match in sorted order
@@ -231,12 +231,12 @@ public class RsstTests
         // Build inner RSST
         RsstBuilder innerBuilder = new();
         innerBuilder.Add([0x01, 0x02], [0xAA, 0xBB]);
-        byte[] innerData = innerBuilder.Build();
+        byte[] innerData = innerBuilder.BuildToArray();
 
         // Store as value in outer RSST
         RsstBuilder outerBuilder = new();
         outerBuilder.Add([0x00], innerData);
-        byte[] outerData = outerBuilder.Build();
+        byte[] outerData = outerBuilder.BuildToArray();
 
         // Read outer RSST
         Rsst.Rsst outer = new(outerData);
@@ -267,10 +267,10 @@ public class RsstTests
         // Build inner account RSST
         RsstBuilder accountBuilder = new();
         accountBuilder.Add(addr, accountRlp);
-        byte[] accountsInner = accountBuilder.Build();
+        byte[] accountsInner = accountBuilder.BuildToArray();
 
         // Build empty inner RSSTs for other columns
-        byte[] emptyInner = new RsstBuilder().Build();
+        byte[] emptyInner = new RsstBuilder().BuildToArray();
 
         // Build outer RSST with 5 columns
         RsstBuilder outerBuilder = new();
@@ -279,7 +279,7 @@ public class RsstTests
         outerBuilder.Add([0x02], emptyInner);
         outerBuilder.Add([0x03], emptyInner);
         outerBuilder.Add([0x04], emptyInner);
-        byte[] outerData = outerBuilder.Build();
+        byte[] outerData = outerBuilder.BuildToArray();
 
         // Read outer RSST
         Rsst.Rsst outer = new(outerData);

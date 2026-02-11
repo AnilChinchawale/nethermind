@@ -379,35 +379,68 @@ public class PersistenceManager(
         Rsst.Rsst olderOuter = new(olderSpan);
         Rsst.Rsst newerOuter = new(newerSpan);
 
-        Rsst.RsstBuilder outerBuilder = new();
-        ReadOnlySpan<byte> tags = [
-            PersistedSnapshot.AccountTag,
-            PersistedSnapshot.StorageTag,
-            PersistedSnapshot.SelfDestructTag,
-            PersistedSnapshot.StateNodeTag,
-            PersistedSnapshot.StorageNodeTag
-        ];
-
-        Span<byte> tagKey = stackalloc byte[1];
-        foreach (byte tag in tags)
+        byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(olderData.Length + newerData.Length + 4096);
+        try
         {
-            tagKey[0] = tag;
-            bool hasOlder = olderOuter.TryGet(tagKey, out ReadOnlySpan<byte> olderColumn);
-            bool hasNewer = newerOuter.TryGet(tagKey, out ReadOnlySpan<byte> newerColumn);
+            Rsst.RsstBuilder outerBuilder = new(buffer, 0);
+            ReadOnlySpan<byte> tags = [
+                PersistedSnapshot.AccountTag,
+                PersistedSnapshot.StorageTag,
+                PersistedSnapshot.SelfDestructTag,
+                PersistedSnapshot.StateNodeTag,
+                PersistedSnapshot.StorageNodeTag
+            ];
 
-            byte[] mergedColumn;
-            if (hasOlder && hasNewer)
-                mergedColumn = Rsst.RsstBuilder.StreamingMerge(olderColumn, newerColumn);
-            else if (hasNewer)
-                mergedColumn = newerColumn.ToArray();
-            else if (hasOlder)
-                mergedColumn = olderColumn.ToArray();
-            else
-                mergedColumn = new Rsst.RsstBuilder().Build();
+            byte[] columnBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(olderData.Length, newerData.Length));
+            try
+            {
+                Span<byte> tagKey = stackalloc byte[1];
+                foreach (byte tag in tags)
+                {
+                    tagKey[0] = tag;
+                    bool hasOlder = olderOuter.TryGet(tagKey, out ReadOnlySpan<byte> olderColumn);
+                    bool hasNewer = newerOuter.TryGet(tagKey, out ReadOnlySpan<byte> newerColumn);
 
-            outerBuilder.Add(tagKey, mergedColumn);
+                    outerBuilder.BeginValueWrite();
+                    int valueStart = outerBuilder.CurrentPosition;
+                    int columnLen;
+
+                    if (hasOlder && hasNewer)
+                    {
+                        columnLen = Rsst.RsstBuilder.StreamingMerge(olderColumn, newerColumn, columnBuffer, 0);
+                        columnBuffer.AsSpan(0, columnLen).CopyTo(buffer.AsSpan(valueStart));
+                    }
+                    else if (hasNewer)
+                    {
+                        columnLen = newerColumn.Length;
+                        newerColumn.CopyTo(buffer.AsSpan(valueStart));
+                    }
+                    else if (hasOlder)
+                    {
+                        columnLen = olderColumn.Length;
+                        olderColumn.CopyTo(buffer.AsSpan(valueStart));
+                    }
+                    else
+                    {
+                        buffer[valueStart] = 0x00;
+                        buffer[valueStart + 1] = 0x01;
+                        columnLen = 2;
+                    }
+
+                    outerBuilder.FinishValueWrite(columnLen, tagKey);
+                }
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(columnBuffer);
+            }
+
+            int endPos = outerBuilder.Build();
+            return buffer.AsSpan(0, endPos).ToArray();
         }
-
-        return outerBuilder.Build();
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 }

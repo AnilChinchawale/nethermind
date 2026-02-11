@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using System.Buffers;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
@@ -15,31 +16,61 @@ namespace Nethermind.State.Flat.PersistedSnapshots;
 /// Builds columnar RSST byte data from an in-memory <see cref="Snapshot"/>.
 /// The outer RSST has 5 column entries (tags 0x00-0x04), each containing an inner RSST.
 /// Inner RSST keys are the entity keys without the tag prefix.
+///
+/// Span-based implementation: writes directly into preallocated buffer, no intermediate allocations.
 /// </summary>
 public static class PersistedSnapshotBuilder
 {
-    public static byte[] Build(Snapshot snapshot)
+    public static int Build(Snapshot snapshot, byte[] output)
     {
-        // Build 5 inner RSSTs, one per column
-        byte[] accountsRsst = BuildAccountsColumn(snapshot);
-        byte[] storageRsst = BuildStorageColumn(snapshot);
-        byte[] selfDestructRsst = BuildSelfDestructColumn(snapshot);
-        byte[] stateNodesRsst = BuildStateNodesColumn(snapshot);
-        byte[] storageNodesRsst = BuildStorageNodesColumn(snapshot);
+        RsstBuilder outer = new(output, 0);
 
-        // Build outer RSST with single-byte column keys
-        RsstBuilder outer = new();
-        outer.Add([PersistedSnapshot.AccountTag], accountsRsst);
-        outer.Add([PersistedSnapshot.StorageTag], storageRsst);
-        outer.Add([PersistedSnapshot.SelfDestructTag], selfDestructRsst);
-        outer.Add([PersistedSnapshot.StateNodeTag], stateNodesRsst);
-        outer.Add([PersistedSnapshot.StorageNodeTag], storageNodesRsst);
+        // Column 0: Accounts
+        WriteAccountsColumn(outer, snapshot);
+
+        // Column 1: Storage
+        WriteStorageColumn(outer, snapshot);
+
+        // Column 2: Self-destruct
+        WriteSelfDestructColumn(outer, snapshot);
+
+        // Column 3: State nodes
+        WriteStateNodesColumn(outer, snapshot);
+
+        // Column 4: Storage nodes
+        WriteStorageNodesColumn(outer, snapshot);
 
         return outer.Build();
     }
 
-    private static byte[] BuildAccountsColumn(Snapshot snapshot)
+    public static byte[] Build(Snapshot snapshot)
     {
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(EstimateOutputSize(snapshot));
+        try
+        {
+            int written = Build(snapshot, buffer);
+            return buffer.AsSpan(0, written).ToArray();
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static int EstimateOutputSize(Snapshot snapshot)
+    {
+        // Rough estimate: accounts + storage + nodes
+        int estimate = snapshot.Accounts.Count() * 100;
+        estimate += snapshot.Storages.Count() * 64;
+        estimate += snapshot.SelfDestructedStorageAddresses.Count() * 32;
+        estimate += snapshot.StateNodes.Count() * 128;
+        estimate += snapshot.StorageNodes.Count() * 128;
+        return Math.Max(1024, estimate);
+    }
+
+    private static void WriteAccountsColumn(RsstBuilder outer, Snapshot snapshot)
+    {
+        // Sort accounts
         List<(AddressAsKey Key, Account? Value)> accounts = new();
         foreach (KeyValuePair<AddressAsKey, Account?> kv in snapshot.Accounts)
         {
@@ -47,7 +78,11 @@ public static class PersistedSnapshotBuilder
         }
         accounts.Sort((a, b) => a.Key.Value.Bytes.SequenceCompareTo(b.Key.Value.Bytes));
 
-        RsstBuilder builder = new();
+        // Begin outer value write for accounts column
+        outer.BeginValueWrite();
+        int valueStart = outer.CurrentPosition;
+        RsstBuilder inner = new(outer.OutputBuffer, valueStart);
+
         byte[] rlpBuffer = new byte[256];
         RlpStream rlpStream = new(rlpBuffer);
 
@@ -55,22 +90,24 @@ public static class PersistedSnapshotBuilder
         {
             if (value is null)
             {
-                builder.Add(key.Value.Bytes, ReadOnlySpan<byte>.Empty);
+                inner.Add(key.Value.Bytes, ReadOnlySpan<byte>.Empty);
             }
             else
             {
                 int len = AccountDecoder.Slim.GetLength(value);
                 rlpStream.Reset();
                 AccountDecoder.Slim.Encode(rlpStream, value);
-                builder.Add(key.Value.Bytes, rlpBuffer.AsSpan(0, len));
+                inner.Add(key.Value.Bytes, rlpBuffer.AsSpan(0, len));
             }
         }
 
-        return builder.Build();
+        int innerEnd = inner.Build();
+        outer.FinishValueWrite(innerEnd - valueStart, stackalloc byte[] { PersistedSnapshot.AccountTag });
     }
 
-    private static byte[] BuildStorageColumn(Snapshot snapshot)
+    private static void WriteStorageColumn(RsstBuilder outer, Snapshot snapshot)
     {
+        // Sort storage
         List<((AddressAsKey Addr, UInt256 Slot) Key, SlotValue? Value)> storages = new();
         foreach (KeyValuePair<(AddressAsKey, UInt256), SlotValue?> kv in snapshot.Storages)
         {
@@ -83,7 +120,10 @@ public static class PersistedSnapshotBuilder
             return a.Key.Slot.CompareTo(b.Key.Slot);
         });
 
-        RsstBuilder builder = new();
+        outer.BeginValueWrite();
+        int valueStart = outer.CurrentPosition;
+        RsstBuilder inner = new(outer.OutputBuffer, valueStart);
+
         byte[] keyBuffer = new byte[Address.Size + 32];
 
         foreach (((AddressAsKey addr, UInt256 slotIdx) key, SlotValue? value) in storages)
@@ -94,19 +134,21 @@ public static class PersistedSnapshotBuilder
             if (value.HasValue)
             {
                 ReadOnlySpan<byte> withoutLeadingZeros = value.Value.AsReadOnlySpan.WithoutLeadingZeros();
-                builder.Add(keyBuffer.AsSpan(0, Address.Size + 32), withoutLeadingZeros);
+                inner.Add(keyBuffer.AsSpan(0, Address.Size + 32), withoutLeadingZeros);
             }
             else
             {
-                builder.Add(keyBuffer.AsSpan(0, Address.Size + 32), ReadOnlySpan<byte>.Empty);
+                inner.Add(keyBuffer.AsSpan(0, Address.Size + 32), ReadOnlySpan<byte>.Empty);
             }
         }
 
-        return builder.Build();
+        int innerEnd = inner.Build();
+        outer.FinishValueWrite(innerEnd - valueStart, stackalloc byte[] { PersistedSnapshot.StorageTag });
     }
 
-    private static byte[] BuildSelfDestructColumn(Snapshot snapshot)
+    private static void WriteSelfDestructColumn(RsstBuilder outer, Snapshot snapshot)
     {
+        // Sort self-destructs
         List<(AddressAsKey Key, bool Value)> selfDestructs = new();
         foreach (KeyValuePair<AddressAsKey, bool> kv in snapshot.SelfDestructedStorageAddresses)
         {
@@ -114,17 +156,23 @@ public static class PersistedSnapshotBuilder
         }
         selfDestructs.Sort((a, b) => a.Key.Value.Bytes.SequenceCompareTo(b.Key.Value.Bytes));
 
-        RsstBuilder builder = new();
+        outer.BeginValueWrite();
+        int valueStart = outer.CurrentPosition;
+        RsstBuilder inner = new(outer.OutputBuffer, valueStart);
+
+        ReadOnlySpan<byte> trueValue = stackalloc byte[] { 0x01 };
         foreach ((AddressAsKey key, bool value) in selfDestructs)
         {
-            builder.Add(key.Value.Bytes, value ? [0x01] : ReadOnlySpan<byte>.Empty);
+            inner.Add(key.Value.Bytes, value ? trueValue : ReadOnlySpan<byte>.Empty);
         }
 
-        return builder.Build();
+        int innerEnd = inner.Build();
+        outer.FinishValueWrite(innerEnd - valueStart, stackalloc byte[] { PersistedSnapshot.SelfDestructTag });
     }
 
-    private static byte[] BuildStateNodesColumn(Snapshot snapshot)
+    private static void WriteStateNodesColumn(RsstBuilder outer, Snapshot snapshot)
     {
+        // Sort state nodes
         List<(TreePath Path, TrieNode Node)> stateNodes = new();
         foreach (KeyValuePair<TreePath, TrieNode> kv in snapshot.StateNodes)
         {
@@ -138,20 +186,25 @@ public static class PersistedSnapshotBuilder
             return a.Path.Length.CompareTo(b.Path.Length);
         });
 
-        RsstBuilder builder = new();
+        outer.BeginValueWrite();
+        int valueStart = outer.CurrentPosition;
+        RsstBuilder inner = new(outer.OutputBuffer, valueStart);
+
         byte[] keyBuffer = new byte[32 + 1];
         foreach ((TreePath path, TrieNode node) in stateNodes)
         {
             path.Path.Bytes.CopyTo(keyBuffer.AsSpan());
             keyBuffer[32] = (byte)path.Length;
-            builder.Add(keyBuffer.AsSpan(0, 33), node.FullRlp.Span);
+            inner.Add(keyBuffer.AsSpan(0, 33), node.FullRlp.Span);
         }
 
-        return builder.Build();
+        int innerEnd = inner.Build();
+        outer.FinishValueWrite(innerEnd - valueStart, stackalloc byte[] { PersistedSnapshot.StateNodeTag });
     }
 
-    private static byte[] BuildStorageNodesColumn(Snapshot snapshot)
+    private static void WriteStorageNodesColumn(RsstBuilder outer, Snapshot snapshot)
     {
+        // Sort storage nodes
         List<((Hash256AsKey Addr, TreePath Path) Key, TrieNode Node)> storageNodes = new();
         foreach (KeyValuePair<(Hash256AsKey, TreePath), TrieNode> kv in snapshot.StorageNodes)
         {
@@ -167,16 +220,20 @@ public static class PersistedSnapshotBuilder
             return a.Key.Path.Length.CompareTo(b.Key.Path.Length);
         });
 
-        RsstBuilder builder = new();
+        outer.BeginValueWrite();
+        int valueStart = outer.CurrentPosition;
+        RsstBuilder inner = new(outer.OutputBuffer, valueStart);
+
         byte[] keyBuffer = new byte[32 + 32 + 1];
         foreach (((Hash256AsKey addr, TreePath path) snKey, TrieNode node) in storageNodes)
         {
             snKey.addr.Value.Bytes.CopyTo(keyBuffer.AsSpan());
             snKey.path.Path.Bytes.CopyTo(keyBuffer.AsSpan(32));
             keyBuffer[64] = (byte)snKey.path.Length;
-            builder.Add(keyBuffer.AsSpan(0, 65), node.FullRlp.Span);
+            inner.Add(keyBuffer.AsSpan(0, 65), node.FullRlp.Span);
         }
 
-        return builder.Build();
+        int innerEnd = inner.Build();
+        outer.FinishValueWrite(innerEnd - valueStart, stackalloc byte[] { PersistedSnapshot.StorageNodeTag });
     }
 }
