@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Nethermind.Core;
@@ -27,6 +28,8 @@ public class PersistenceManagerTests
     private TestFinalizedStateProvider _finalizedStateProvider = null!;
     private SnapshotRepository _snapshotRepository = null!;
     private IPersistence _persistence = null!;
+    private IPersistedSnapshotManager _persistedSnapshotManager = null!;
+    private IPersistedSnapshotRepository _persistedSnapshotRepository = null!;
     private ResourcePool _resourcePool = null!;
     private StateId Block0 = new StateId(0, Keccak.EmptyTreeHash);
 
@@ -50,18 +53,23 @@ public class PersistenceManagerTests
         persistenceReader.CurrentState.Returns(Block0);
         _persistence.CreateReader().Returns(persistenceReader);
 
+        _persistedSnapshotManager = Substitute.For<IPersistedSnapshotManager>();
+        _persistedSnapshotRepository = Substitute.For<IPersistedSnapshotRepository>();
+
         _persistenceManager = new PersistenceManager(
             _config,
             _finalizedStateProvider,
             _persistence,
             _snapshotRepository,
             LimboLogs.Instance,
-            Substitute.For<IPersistedSnapshotManager>());
+            _persistedSnapshotManager,
+            _persistedSnapshotRepository);
     }
 
     [TearDown]
     public void TearDown()
     {
+        _persistedSnapshotRepository.Dispose();
     }
 
     private StateId CreateStateId(long blockNumber, byte rootByte = 0)
@@ -199,6 +207,29 @@ public class PersistenceManagerTests
 
         Assert.That(persistedToPersist, Is.Null);
         Assert.That(toPersist, Is.Null);
+    }
+
+    [Test]
+    public void DetermineSnapshotAction_FinalizedNoInMemory_FallsBackToPersistedSnapshot()
+    {
+        // Setup: persisted at Block0, latest at 100, finalized at 100
+        StateId latest = CreateStateId(100);
+        _finalizedStateProvider.SetFinalizedBlockNumber(100);
+        _finalizedStateProvider.SetFinalizedStateRootAt(16, new Hash256(CreateStateId(16).StateRoot.Bytes));
+
+        // Don't create any in-memory snapshots — configure persisted snapshot fallback
+        StateId target = CreateStateId(16);
+        PersistedSnapshot persisted = new PersistedSnapshot(1, Block0, target, PersistedSnapshotType.Base, Memory<byte>.Empty);
+        _persistedSnapshotRepository.TryLeaseCompactedSnapshotTo(target, out Arg.Any<PersistedSnapshot?>())
+            .Returns(x => { x[1] = persisted; return true; });
+
+        (PersistedSnapshot? persistedToPersist, Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
+
+        Assert.That(persistedToPersist, Is.Not.Null);
+        Assert.That(toPersist, Is.Null);
+        Assert.That(toConvert, Is.Null);
+
+        persistedToPersist!.Dispose();
     }
 
     [Test]
