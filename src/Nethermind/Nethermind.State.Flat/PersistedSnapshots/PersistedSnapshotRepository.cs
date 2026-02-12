@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using Nethermind.State.Flat.Storage;
 
 namespace Nethermind.State.Flat.PersistedSnapshots;
@@ -278,6 +279,51 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
 
             if (removed > 0) _catalog.Save();
             return removed;
+        }
+    }
+
+    public bool TryLeaseSnapshotTo(StateId toState, [NotNullWhen(true)] out PersistedSnapshot? snapshot)
+    {
+        lock (_lock)
+        {
+            if (_baseSnapshots.TryGetValue(toState, out snapshot) && snapshot.TryAcquire())
+                return true;
+            snapshot = null;
+            return false;
+        }
+    }
+
+    public bool TryLeaseCompactedSnapshotTo(StateId toState, [NotNullWhen(true)] out PersistedSnapshot? snapshot)
+    {
+        lock (_lock)
+        {
+            if (_compactedSnapshots.TryGetValue(toState, out snapshot) && snapshot.TryAcquire())
+                return true;
+            snapshot = null;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Find the snapshot whose From matches the given state. Tries compacted first (larger range = faster catch-up), then base.
+    /// </summary>
+    public PersistedSnapshot? TryGetSnapshotFrom(StateId fromState)
+    {
+        lock (_lock)
+        {
+            foreach (PersistedSnapshot snapshot in _compactedSnapshots.Values)
+            {
+                if (snapshot.From == fromState && snapshot.TryAcquire())
+                    return snapshot;
+            }
+
+            foreach (PersistedSnapshot snapshot in _baseSnapshots.Values)
+            {
+                if (snapshot.From == fromState && snapshot.TryAcquire())
+                    return snapshot;
+            }
+
+            return null;
         }
     }
 

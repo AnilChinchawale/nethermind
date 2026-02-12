@@ -98,6 +98,12 @@ public class PersistedSnapshotManager(
     }
 
     /// <summary>
+    /// Get the oldest persisted snapshot starting from the current persisted state.
+    /// </summary>
+    public PersistedSnapshot? TryGetOldestSnapshot(StateId currentPersistedState) =>
+        persistedSnapshotRepository.TryGetSnapshotFrom(currentPersistedState);
+
+    /// <summary>
     /// Prune persisted snapshots older than the given state.
     /// </summary>
     public void PrunePersistedSnapshots(StateId currentPersistedState)

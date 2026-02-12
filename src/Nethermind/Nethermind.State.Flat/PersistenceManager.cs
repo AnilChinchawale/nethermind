@@ -27,7 +27,8 @@ public class PersistenceManager(
     IPersistence persistence,
     ISnapshotRepository snapshotRepository,
     ILogManager logManager,
-    IPersistedSnapshotManager persistedSnapshotManager) : IPersistenceManager
+    IPersistedSnapshotManager persistedSnapshotManager,
+    IPersistedSnapshotRepository persistedSnapshotRepository) : IPersistenceManager
 {
     private readonly ILogger _logger = logManager.GetClassLogger();
     private readonly int _minReorgDepth = configuration.MinReorgDepth;
@@ -51,7 +52,7 @@ public class PersistenceManager(
         return _currentPersistedStateId;
     }
 
-    private Snapshot? GetFinalizedSnapshotAtBlockNumber(long blockNumber, StateId currentPersistedState, bool compactedSnapshot)
+    private (PersistedSnapshot? Persisted, Snapshot? InMemory) GetFinalizedSnapshotAtBlockNumber(long blockNumber, StateId currentPersistedState, bool compactedSnapshot)
     {
         Hash256? finalizedStateRoot = finalizedStateProvider.GetFinalizedStateRootAt(blockNumber);
         using ArrayPoolList<StateId> states = snapshotRepository.GetStatesAtBlockNumber(blockNumber);
@@ -73,13 +74,28 @@ public class PersistenceManager(
             {
                 if (_logger.IsDebug) _logger.Debug($"Persisting compacted state {stateId}");
 
-                return snapshot;
+                return (null, snapshot);
             }
 
             snapshot.Dispose();
         }
 
-        return null;
+        // No in-memory snapshot found — try persisted snapshot at same block/root
+        if (finalizedStateRoot is not null)
+        {
+            StateId targetStateId = new StateId(blockNumber, finalizedStateRoot);
+            bool found = compactedSnapshot
+                ? persistedSnapshotRepository.TryLeaseCompactedSnapshotTo(targetStateId, out PersistedSnapshot? persisted)
+                : persistedSnapshotRepository.TryLeaseSnapshotTo(targetStateId, out persisted);
+            if (found)
+            {
+                if (persisted!.From == currentPersistedState)
+                    return (persisted, null);
+                persisted.Dispose();
+            }
+        }
+
+        return (null, null);
     }
 
     private Snapshot? GetFirstSnapshotAtBlockNumber(long blockNumber, StateId currentPersistedState, bool compactedSnapshot)
@@ -163,6 +179,13 @@ public class PersistenceManager(
         {
             if (snapshotsDepth <= _maxInMemoryReorgDepth)
             {
+                // No action needed
+                return (null, null, null);
+            }
+
+            if (snapshotsDepth > _longFinalityReorgDepth)
+            {
+                // Need to force persisted snapshot
                 return (TryGetForcePersistedSnapshot(currentPersistedState, snapshotsDepth), null, null);
             }
 
@@ -172,20 +195,27 @@ public class PersistenceManager(
             if (toConvert is not null)
                 return (null, null, toConvert);
 
-            // Nothing left to convert — check force-persist
-            return (TryGetForcePersistedSnapshot(currentPersistedState, snapshotsDepth), null, null);
+            // Nothing to do. No in memory snapshot, and under long finality reorg depth
+            return (null, null, null);
         }
 
-        Snapshot? snapshotToPersist =
-            GetFinalizedSnapshotAtBlockNumber(currentPersistedState.BlockNumber + _compactSize, currentPersistedState, true) ??
-            GetFinalizedSnapshotAtBlockNumber(currentPersistedState.BlockNumber + 1, currentPersistedState, false);
+        (PersistedSnapshot? persistedSnapshot, Snapshot? snapshotToPersist) =
+            GetFinalizedSnapshotAtBlockNumber(currentPersistedState.BlockNumber + _compactSize, currentPersistedState, true);
 
-        if (snapshotToPersist is null)
+        if (snapshotToPersist is null && persistedSnapshot is null)
         {
-            if (_logger.IsWarn) _logger.Warn($"Unable to find snapshot to persist. Current persisted state {currentPersistedState}. Compact size {_compactSize}.");
+            (persistedSnapshot, snapshotToPersist) =
+                GetFinalizedSnapshotAtBlockNumber(currentPersistedState.BlockNumber + 1, currentPersistedState, false);
         }
 
-        return (null, snapshotToPersist, null);
+        if (snapshotToPersist is not null)
+            return (null, snapshotToPersist, null);
+
+        if (persistedSnapshot is not null)
+            return (persistedSnapshot, null, null);
+
+        if (_logger.IsWarn) _logger.Warn($"Unable to find snapshot to persist. Current persisted state {currentPersistedState}. Compact size {_compactSize}.");
+        return (null, null, null);
     }
 
     public void AddToPersistence(StateId latestSnapshot)
@@ -246,15 +276,20 @@ public class PersistenceManager(
         while (currentPersistedState.BlockNumber < latestStateId.Value.BlockNumber)
         {
             // Try finalized snapshots first (compacted, then non-compacted)
-            Snapshot? snapshotToPersist = GetFinalizedSnapshotAtBlockNumber(
+            (PersistedSnapshot? persisted, Snapshot? snapshotToPersist) = GetFinalizedSnapshotAtBlockNumber(
                 currentPersistedState.BlockNumber + _compactSize,
                 currentPersistedState,
                 compactedSnapshot: true);
+            persisted?.Dispose();
 
-            snapshotToPersist ??= GetFinalizedSnapshotAtBlockNumber(
-                currentPersistedState.BlockNumber + 1,
-                currentPersistedState,
-                compactedSnapshot: false);
+            if (snapshotToPersist is null)
+            {
+                (persisted, snapshotToPersist) = GetFinalizedSnapshotAtBlockNumber(
+                    currentPersistedState.BlockNumber + 1,
+                    currentPersistedState,
+                    compactedSnapshot: false);
+                persisted?.Dispose();
+            }
 
             // Fall back to the first available snapshot if finalized not available
             snapshotToPersist ??= GetFirstSnapshotAtBlockNumber(
