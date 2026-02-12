@@ -86,7 +86,7 @@ public class FlatDbManagerPersistedTests
 
         using PersistedSnapshotRepository repo = new(_testDir, maxArenaSize: 4096);
         repo.LoadFromCatalog();
-        repo.PersistSnapshot(snap);
+        repo.AddBaseSnapshot(snap);
 
         // Mock persistence manager at s0 — persisted snapshot fills gap s0→s1
         IPersistenceManager persistenceManager = Substitute.For<IPersistenceManager>();
@@ -132,7 +132,7 @@ public class FlatDbManagerPersistedTests
         StateId s1 = new(1, Keccak.Compute("1"));
         SnapshotContent content = new();
         content.Accounts[TestItem.AddressA] = Build.An.Account.WithBalance(1).TestObject;
-        repo.PersistSnapshot(new Snapshot(s0, s1, content, _pool, ResourcePool.Usage.MainBlockProcessing));
+        repo.AddBaseSnapshot(new Snapshot(s0, s1, content, _pool, ResourcePool.Usage.MainBlockProcessing));
 
         FlatDbManager manager = new(
             Substitute.For<IResourcePool>(),

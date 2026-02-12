@@ -8,6 +8,7 @@ namespace Nethermind.State.Flat.PersistedSnapshots;
 public interface IPersistedSnapshotRepository : IDisposable
 {
     int SnapshotCount { get; }
+    int CompactedSnapshotCount { get; }
     void LoadFromCatalog();
 
     // Two-layer storage

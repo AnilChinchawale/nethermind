@@ -83,7 +83,7 @@ public class LongFinalityIntegrationTests
             c.StorageNodes[(storageAddr, storagePath)] = new TrieNode(NodeType.Branch, storageRlp);
         });
 
-        repo.PersistSnapshot(snap);
+        repo.AddBaseSnapshot(snap);
         using PersistedSnapshotList list = repo.AssembleSnapshots(s1, s0);
         Assert.That(list.Count, Is.EqualTo(1));
 
@@ -111,13 +111,13 @@ public class LongFinalityIntegrationTests
         {
             repo.LoadFromCatalog();
 
-            repo.PersistSnapshot(CreateSnapshot(s0, s1, c =>
+            repo.AddBaseSnapshot(CreateSnapshot(s0, s1, c =>
             {
                 c.StateNodes[path1] = new TrieNode(NodeType.Leaf, rlp1);
                 c.Accounts[TestItem.AddressA] = Build.An.Account.WithBalance(100).TestObject;
             }));
 
-            repo.PersistSnapshot(CreateSnapshot(s1, s2, c =>
+            repo.AddBaseSnapshot(CreateSnapshot(s1, s2, c =>
             {
                 c.StateNodes[path2] = new TrieNode(NodeType.Leaf, rlp2);
                 c.Accounts[TestItem.AddressB] = Build.An.Account.WithBalance(200).TestObject;
@@ -203,7 +203,7 @@ public class LongFinalityIntegrationTests
         for (int i = 1; i <= snapshotCount; i++)
         {
             StateId current = new(i, Keccak.Compute(i.ToString()));
-            repo.PersistSnapshot(CreateSnapshot(prev, current, c =>
+            repo.AddBaseSnapshot(CreateSnapshot(prev, current, c =>
                 c.Accounts[new Address(Keccak.Compute(i.ToString()))] =
                     Build.An.Account.WithBalance((UInt256)i).TestObject));
             prev = current;
@@ -228,7 +228,7 @@ public class LongFinalityIntegrationTests
         byte[] nodeRlp = [0xC0, 0x80];
 
         // Persist a snapshot with a state node
-        repo.PersistSnapshot(CreateSnapshot(s0, s1, c =>
+        repo.AddBaseSnapshot(CreateSnapshot(s0, s1, c =>
             c.StateNodes[path] = new TrieNode(NodeType.Leaf, nodeRlp)));
 
         // Set up persistence reader at s0 — persisted snapshot fills gap s0→s1
@@ -274,11 +274,11 @@ public class LongFinalityIntegrationTests
         using (PersistedSnapshotRepository repo = new(_testDir, maxArenaSize: 4096))
         {
             repo.LoadFromCatalog();
-            repo.PersistSnapshot(CreateSnapshot(s0, s1, c =>
+            repo.AddBaseSnapshot(CreateSnapshot(s0, s1, c =>
                 c.Accounts[TestItem.AddressA] = Build.An.Account.WithBalance(1).TestObject));
-            repo.PersistSnapshot(CreateSnapshot(s1, s2, c =>
+            repo.AddBaseSnapshot(CreateSnapshot(s1, s2, c =>
                 c.Accounts[TestItem.AddressB] = Build.An.Account.WithBalance(2).TestObject));
-            repo.PersistSnapshot(CreateSnapshot(s2, s5, c =>
+            repo.AddBaseSnapshot(CreateSnapshot(s2, s5, c =>
                 c.Accounts[TestItem.AddressC] = Build.An.Account.WithBalance(5).TestObject));
         }
 
@@ -312,7 +312,7 @@ public class LongFinalityIntegrationTests
 
         // Persist an empty snapshot
         Snapshot empty = CreateSnapshot(s0, s1, _ => { });
-        PersistedSnapshot persisted = repo.PersistSnapshot(empty);
+        PersistedSnapshot persisted = repo.AddBaseSnapshot(empty);
 
         Assert.That(persisted.TryGetAccount(TestItem.AddressA, out _), Is.False);
         Assert.That(persisted.TryLoadStateNodeRlp(new TreePath(Keccak.Compute("any"), 4), out _), Is.False);

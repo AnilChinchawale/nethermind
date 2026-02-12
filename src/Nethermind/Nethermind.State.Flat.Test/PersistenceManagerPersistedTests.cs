@@ -295,15 +295,15 @@ public class PersistenceManagerPersistedTests
 
         SnapshotContent c1 = new();
         c1.Accounts[TestItem.AddressA] = Build.An.Account.WithBalance(1).TestObject;
-        repo.PersistSnapshot(new Snapshot(s0, s1, c1, _pool, ResourcePool.Usage.MainBlockProcessing));
+        repo.AddBaseSnapshot(new Snapshot(s0, s1, c1, _pool, ResourcePool.Usage.MainBlockProcessing));
 
         SnapshotContent c2 = new();
         c2.Accounts[TestItem.AddressB] = Build.An.Account.WithBalance(2).TestObject;
-        repo.PersistSnapshot(new Snapshot(s1, s3, c2, _pool, ResourcePool.Usage.MainBlockProcessing));
+        repo.AddBaseSnapshot(new Snapshot(s1, s3, c2, _pool, ResourcePool.Usage.MainBlockProcessing));
 
         SnapshotContent c3 = new();
         c3.Accounts[TestItem.AddressC] = Build.An.Account.WithBalance(3).TestObject;
-        repo.PersistSnapshot(new Snapshot(s3, s6, c3, _pool, ResourcePool.Usage.MainBlockProcessing));
+        repo.AddBaseSnapshot(new Snapshot(s3, s6, c3, _pool, ResourcePool.Usage.MainBlockProcessing));
 
         Assert.That(repo.SnapshotCount, Is.EqualTo(3));
 

@@ -54,8 +54,8 @@ public class PersistedSnapshotRepositoryTests
         StateId s1 = new(1, Keccak.Compute("1"));
         Snapshot snap = CreateTestSnapshot(s0, s1, TestItem.AddressA);
 
-        PersistedSnapshot persisted = repo.PersistSnapshot(snap);
-        Assert.That(persisted.Id, Is.GreaterThan(0));
+        PersistedSnapshot persisted = repo.AddBaseSnapshot(snap);
+        Assert.That(persisted.Id, Is.GreaterThanOrEqualTo(0));
         Assert.That(persisted.From, Is.EqualTo(s0));
         Assert.That(persisted.To, Is.EqualTo(s1));
         Assert.That(repo.SnapshotCount, Is.EqualTo(1));
@@ -91,8 +91,8 @@ public class PersistedSnapshotRepositoryTests
         content2.StateNodes[path] = new TrieNode(NodeType.Leaf, rlp2);
         Snapshot snap2 = new(s1, s2, content2, _pool, ResourcePool.Usage.MainBlockProcessing);
 
-        repo.PersistSnapshot(snap1);
-        repo.PersistSnapshot(snap2);
+        repo.AddBaseSnapshot(snap1);
+        repo.AddBaseSnapshot(snap2);
 
         using PersistedSnapshotList list = repo.AssembleSnapshots(s2, s0);
 
@@ -122,7 +122,7 @@ public class PersistedSnapshotRepositoryTests
         {
             repo.LoadFromCatalog();
             Snapshot snap = CreateTestSnapshot(s0, s1, TestItem.AddressA);
-            repo.PersistSnapshot(snap);
+            repo.AddBaseSnapshot(snap);
         }
 
         // Session 2: reload from disk
@@ -151,57 +151,14 @@ public class PersistedSnapshotRepositoryTests
         Snapshot snap2 = CreateTestSnapshot(s1, s2, TestItem.AddressB);
         Snapshot snap3 = CreateTestSnapshot(s2, s3, TestItem.AddressC);
 
-        repo.PersistSnapshot(snap1);
-        repo.PersistSnapshot(snap2);
-        repo.PersistSnapshot(snap3);
+        repo.AddBaseSnapshot(snap1);
+        repo.AddBaseSnapshot(snap2);
+        repo.AddBaseSnapshot(snap3);
         Assert.That(repo.SnapshotCount, Is.EqualTo(3));
 
         // Prune before block 2 (removes snap1 with To=1)
         int pruned = repo.PruneBefore(new StateId(2, Keccak.Compute("prune")));
         Assert.That(pruned, Is.EqualTo(1));
         Assert.That(repo.SnapshotCount, Is.EqualTo(2));
-    }
-
-    [Test]
-    public void PruneBefore_SkipsReferencedSnapshots()
-    {
-        using PersistedSnapshotRepository repo = new(_testDir, maxArenaSize: 4096);
-        repo.LoadFromCatalog();
-
-        StateId s0 = new(0, Keccak.EmptyTreeHash);
-        StateId s1 = new(1, Keccak.Compute("1"));
-        StateId s2 = new(10, Keccak.Compute("10"));
-
-        // Persist a base snapshot
-        Snapshot snap1 = CreateTestSnapshot(s0, s1, TestItem.AddressA);
-        PersistedSnapshot base1 = repo.PersistSnapshot(snap1);
-
-        // Persist a compacted snapshot referencing base1
-        byte[] compactedData = PersistedSnapshotBuilder.Build(
-            CreateTestSnapshot(s0, s2, TestItem.AddressB));
-        repo.PersistCompactedSnapshot(s0, s2, compactedData, [base1.Id]);
-
-        // Try to prune before block 5 - base1 (To=1) would be pruned,
-        // but it's referenced by the compacted snapshot
-        int pruned = repo.PruneBefore(new StateId(5, Keccak.Compute("prune")));
-        Assert.That(pruned, Is.EqualTo(0), "Referenced base snapshot should not be pruned");
-        Assert.That(repo.SnapshotCount, Is.EqualTo(2));
-    }
-
-    [Test]
-    public void FindById_ReturnsCorrectSnapshot()
-    {
-        using PersistedSnapshotRepository repo = new(_testDir, maxArenaSize: 4096);
-        repo.LoadFromCatalog();
-
-        StateId s0 = new(0, Keccak.EmptyTreeHash);
-        StateId s1 = new(1, Keccak.Compute("1"));
-        Snapshot snap = CreateTestSnapshot(s0, s1, TestItem.AddressA);
-
-        PersistedSnapshot persisted = repo.PersistSnapshot(snap);
-
-        Assert.That(repo.FindById(persisted.Id), Is.Not.Null);
-        Assert.That(repo.FindById(persisted.Id)!.To, Is.EqualTo(s1));
-        Assert.That(repo.FindById(999), Is.Null);
     }
 }

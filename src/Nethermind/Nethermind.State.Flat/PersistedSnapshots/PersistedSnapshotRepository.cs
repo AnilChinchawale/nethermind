@@ -17,8 +17,7 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     private readonly SnapshotCatalog _catalog;
     private readonly ConcurrentDictionary<StateId, PersistedSnapshot> _baseSnapshots = new();
     private readonly ConcurrentDictionary<StateId, PersistedSnapshot> _compactedSnapshots = new();
-    private readonly Dictionary<int, HashSet<int>> _referencedBy = []; // baseId -> set of compacted IDs
-    private readonly object _lock = new();
+    private readonly object _catalogLock = new();
     private int _nextId;
 
     public PersistedSnapshotRepository(string basePath, long maxArenaSize = 4L * 1024 * 1024 * 1024)
@@ -28,17 +27,16 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
         _catalog = new SnapshotCatalog(Path.Combine(basePath, "catalog.bin"));
     }
 
-    public int SnapshotCount
-    {
-        get { lock (_lock) return _baseSnapshots.Count + _compactedSnapshots.Count; }
-    }
+    public int SnapshotCount => _baseSnapshots.Count + _compactedSnapshots.Count;
+
+    public int CompactedSnapshotCount => _compactedSnapshots.Count;
 
     /// <summary>
     /// Load all persisted snapshots from catalog and arena files.
     /// </summary>
     public void LoadFromCatalog()
     {
-        lock (_lock)
+        lock (_catalogLock)
         {
             _catalog.Load();
             _arenaManager.Initialize(_catalog.Entries);
@@ -79,7 +77,7 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     {
         byte[] rsstData = PersistedSnapshotBuilder.Build(snapshot);
 
-        lock (_lock)
+        lock (_catalogLock)
         {
             int id = _nextId++;
             SnapshotLocation location = _arenaManager.Allocate(rsstData);
@@ -97,7 +95,7 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     /// </summary>
     public PersistedSnapshot AddCompactedSnapshot(StateId from, StateId to, ReadOnlySpan<byte> rsstData)
     {
-        lock (_lock)
+        lock (_catalogLock)
         {
             int id = _nextId++;
             SnapshotLocation location = _arenaManager.Allocate(rsstData);
@@ -117,43 +115,40 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     /// </summary>
     public PersistedSnapshotList AssembleSnapshots(StateId targetFrom, StateId persistedState)
     {
-        lock (_lock)
+        List<PersistedSnapshot> result = new();
+        StateId current = targetFrom;
+
+        while (current != persistedState)
         {
-            List<PersistedSnapshot> result = new();
-            StateId current = targetFrom;
-
-            while (current != persistedState)
+            PersistedSnapshot? snapshot = TryGetSnapshot(current);
+            if (snapshot is null)
             {
-                PersistedSnapshot? snapshot = TryGetSnapshot(current);
-                if (snapshot is null)
-                {
-                    // Chain broken
-                    DisposeList(result);
-                    return PersistedSnapshotList.Empty;
-                }
-
-                if (!snapshot.TryAcquire())
-                {
-                    DisposeList(result);
-                    return PersistedSnapshotList.Empty;
-                }
-
-                result.Add(snapshot);
-
-                if (snapshot.From == current)
-                    break; // Prevent infinite loop on same-state
-
-                if (snapshot.From == persistedState)
-                    break;
-
-                current = snapshot.From;
+                // Chain broken
+                DisposeList(result);
+                return PersistedSnapshotList.Empty;
             }
 
-            result.Reverse(); // oldest first
-            return result.Count == 0
-                ? PersistedSnapshotList.Empty
-                : new PersistedSnapshotList(result.ToArray());
+            if (!snapshot.TryAcquire())
+            {
+                DisposeList(result);
+                return PersistedSnapshotList.Empty;
+            }
+
+            result.Add(snapshot);
+
+            if (snapshot.From == current)
+                break; // Prevent infinite loop on same-state
+
+            if (snapshot.From == persistedState)
+                break;
+
+            current = snapshot.From;
         }
+
+        result.Reverse(); // oldest first
+        return result.Count == 0
+            ? PersistedSnapshotList.Empty
+            : new PersistedSnapshotList(result.ToArray());
     }
 
     /// <summary>
@@ -182,74 +177,71 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     /// </summary>
     public PersistedSnapshotList AssembleSnapshotsForCompaction(StateId toStateId, long minBlockNumber)
     {
-        lock (_lock)
+        List<PersistedSnapshot> result = new();
+        StateId current = toStateId;
+
+        while (true)
         {
-            List<PersistedSnapshot> result = new();
-            StateId current = toStateId;
+            PersistedSnapshot? snapshot = null;
 
-            while (true)
+            // Try compacted first
+            if (_compactedSnapshots.TryGetValue(current, out PersistedSnapshot? compacted))
             {
-                PersistedSnapshot? snapshot = null;
-
-                // Try compacted first
-                if (_compactedSnapshots.TryGetValue(current, out PersistedSnapshot? compacted))
+                if (compacted.From.BlockNumber < minBlockNumber)
                 {
-                    if (compacted.From.BlockNumber < minBlockNumber)
+                    // Compacted spans too far back, try base
+                    if (_baseSnapshots.TryGetValue(current, out PersistedSnapshot? baseSnap))
                     {
-                        // Compacted spans too far back, try base
-                        if (_baseSnapshots.TryGetValue(current, out PersistedSnapshot? baseSnap))
-                        {
-                            if (baseSnap.From.BlockNumber < minBlockNumber)
-                                break; // Base also spans too far
-                            snapshot = baseSnap;
-                        }
-                        else
-                        {
-                            break;
-                        }
+                        if (baseSnap.From.BlockNumber < minBlockNumber)
+                            break; // Base also spans too far
+                        snapshot = baseSnap;
                     }
                     else
                     {
-                        snapshot = compacted;
-                    }
-                }
-                else if (_baseSnapshots.TryGetValue(current, out PersistedSnapshot? baseSnap))
-                {
-                    if (baseSnap.From.BlockNumber < minBlockNumber)
                         break;
-                    snapshot = baseSnap;
+                    }
                 }
                 else
                 {
-                    break;
+                    snapshot = compacted;
                 }
-
-                if (!snapshot.TryAcquire())
-                {
-                    DisposeList(result);
-                    return PersistedSnapshotList.Empty;
-                }
-
-                result.Add(snapshot);
-
-                if (snapshot.From == current)
-                    break; // Prevent infinite loop
-
-                if (snapshot.From.BlockNumber == minBlockNumber)
+            }
+            else if (_baseSnapshots.TryGetValue(current, out PersistedSnapshot? baseSnap))
+            {
+                if (baseSnap.From.BlockNumber < minBlockNumber)
                     break;
-
-                current = snapshot.From;
+                snapshot = baseSnap;
+            }
+            else
+            {
+                break;
             }
 
-            if (result.Count < 2)
+            if (!snapshot.TryAcquire())
             {
                 DisposeList(result);
                 return PersistedSnapshotList.Empty;
             }
 
-            result.Reverse(); // oldest-first
-            return new PersistedSnapshotList(result.ToArray());
+            result.Add(snapshot);
+
+            if (snapshot.From == current)
+                break; // Prevent infinite loop
+
+            if (snapshot.From.BlockNumber == minBlockNumber)
+                break;
+
+            current = snapshot.From;
         }
+
+        if (result.Count < 2)
+        {
+            DisposeList(result);
+            return PersistedSnapshotList.Empty;
+        }
+
+        result.Reverse(); // oldest-first
+        return new PersistedSnapshotList(result.ToArray());
     }
 
     /// <summary>
@@ -257,7 +249,7 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     /// </summary>
     public int RemoveCompactedSnapshotsAtBlock(long blockNumber)
     {
-        lock (_lock)
+        lock (_catalogLock)
         {
             List<StateId> toRemove = new();
             foreach (KeyValuePair<StateId, PersistedSnapshot> kv in _compactedSnapshots)
@@ -284,24 +276,18 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
 
     public bool TryLeaseSnapshotTo(StateId toState, [NotNullWhen(true)] out PersistedSnapshot? snapshot)
     {
-        lock (_lock)
-        {
-            if (_baseSnapshots.TryGetValue(toState, out snapshot) && snapshot.TryAcquire())
-                return true;
-            snapshot = null;
-            return false;
-        }
+        if (_baseSnapshots.TryGetValue(toState, out snapshot) && snapshot.TryAcquire())
+            return true;
+        snapshot = null;
+        return false;
     }
 
     public bool TryLeaseCompactedSnapshotTo(StateId toState, [NotNullWhen(true)] out PersistedSnapshot? snapshot)
     {
-        lock (_lock)
-        {
-            if (_compactedSnapshots.TryGetValue(toState, out snapshot) && snapshot.TryAcquire())
-                return true;
-            snapshot = null;
-            return false;
-        }
+        if (_compactedSnapshots.TryGetValue(toState, out snapshot) && snapshot.TryAcquire())
+            return true;
+        snapshot = null;
+        return false;
     }
 
     /// <summary>
@@ -309,22 +295,19 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     /// </summary>
     public PersistedSnapshot? TryGetSnapshotFrom(StateId fromState)
     {
-        lock (_lock)
+        foreach (PersistedSnapshot snapshot in _compactedSnapshots.Values)
         {
-            foreach (PersistedSnapshot snapshot in _compactedSnapshots.Values)
-            {
-                if (snapshot.From == fromState && snapshot.TryAcquire())
-                    return snapshot;
-            }
-
-            foreach (PersistedSnapshot snapshot in _baseSnapshots.Values)
-            {
-                if (snapshot.From == fromState && snapshot.TryAcquire())
-                    return snapshot;
-            }
-
-            return null;
+            if (snapshot.From == fromState && snapshot.TryAcquire())
+                return snapshot;
         }
+
+        foreach (PersistedSnapshot snapshot in _baseSnapshots.Values)
+        {
+            if (snapshot.From == fromState && snapshot.TryAcquire())
+                return snapshot;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -332,15 +315,15 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     /// </summary>
     public int PruneBefore(StateId stateId)
     {
-        lock (_lock)
+        lock (_catalogLock)
         {
             int pruned = 0;
 
-            // Prune base snapshots (skip referenced ones)
+            // Prune base snapshots
             List<StateId> baseToRemove = new();
             foreach (KeyValuePair<StateId, PersistedSnapshot> kv in _baseSnapshots)
             {
-                if (kv.Value.To.BlockNumber < stateId.BlockNumber && !IsReferenced(kv.Value.Id))
+                if (kv.Value.To.BlockNumber < stateId.BlockNumber)
                     baseToRemove.Add(kv.Key);
             }
             foreach (StateId key in baseToRemove)
@@ -375,9 +358,6 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
         }
     }
 
-    private bool IsReferenced(int snapshotId) =>
-        _referencedBy.TryGetValue(snapshotId, out HashSet<int>? refs) && refs.Count > 0;
-
     private void RemoveFromCatalog(int snapshotId)
     {
         SnapshotCatalog.CatalogEntry? entry = _catalog.Find(snapshotId);
@@ -386,88 +366,11 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
             _arenaManager.MarkDead(entry.Location);
             _catalog.Remove(snapshotId);
         }
-        _referencedBy.Remove(snapshotId);
-        foreach (HashSet<int> refs in _referencedBy.Values)
-            refs.Remove(snapshotId);
-    }
-
-    // Legacy methods for backward compatibility with existing callers
-
-    /// <summary>
-    /// Legacy: Persist an in-memory snapshot to disk as a base snapshot.
-    /// </summary>
-    public PersistedSnapshot PersistSnapshot(Snapshot snapshot) => AddBaseSnapshot(snapshot);
-
-    /// <summary>
-    /// Legacy: Persist compacted snapshot data.
-    /// </summary>
-    public PersistedSnapshot PersistCompactedSnapshot(StateId from, StateId to, byte[] rsstData, IReadOnlyList<int> referencedBaseIds)
-    {
-        PersistedSnapshot result = AddCompactedSnapshot(from, to, rsstData);
-
-        lock (_lock)
-        {
-            foreach (int baseId in referencedBaseIds)
-            {
-                if (!_referencedBy.TryGetValue(baseId, out HashSet<int>? refs))
-                {
-                    refs = [];
-                    _referencedBy[baseId] = refs;
-                }
-                refs.Add(result.Id);
-            }
-        }
-
-        return result;
-    }
-
-    public PersistedSnapshot? FindById(int id)
-    {
-        lock (_lock)
-        {
-            foreach (PersistedSnapshot snapshot in _baseSnapshots.Values)
-                if (snapshot.Id == id) return snapshot;
-            foreach (PersistedSnapshot snapshot in _compactedSnapshots.Values)
-                if (snapshot.Id == id) return snapshot;
-            return null;
-        }
-    }
-
-    public bool RemoveSnapshot(int snapshotId)
-    {
-        lock (_lock)
-        {
-            // Try base
-            foreach (KeyValuePair<StateId, PersistedSnapshot> kv in _baseSnapshots)
-            {
-                if (kv.Value.Id == snapshotId)
-                {
-                    _baseSnapshots.TryRemove(kv.Key, out _);
-                    RemoveFromCatalog(snapshotId);
-                    kv.Value.Dispose();
-                    return true;
-                }
-            }
-
-            // Try compacted
-            foreach (KeyValuePair<StateId, PersistedSnapshot> kv in _compactedSnapshots)
-            {
-                if (kv.Value.Id == snapshotId)
-                {
-                    _compactedSnapshots.TryRemove(kv.Key, out _);
-                    RemoveFromCatalog(snapshotId);
-                    kv.Value.Dispose();
-                    return true;
-                }
-            }
-
-            return false;
-        }
     }
 
     public void Dispose()
     {
-        lock (_lock)
+        lock (_catalogLock)
         {
             foreach (PersistedSnapshot snapshot in _baseSnapshots.Values)
                 snapshot.Dispose();
@@ -475,7 +378,6 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
                 snapshot.Dispose();
             _baseSnapshots.Clear();
             _compactedSnapshots.Clear();
-            _referencedBy.Clear();
             _arenaManager.Dispose();
         }
     }
