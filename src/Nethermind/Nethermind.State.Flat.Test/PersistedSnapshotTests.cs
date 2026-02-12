@@ -92,7 +92,7 @@ public class PersistedSnapshotTests
         Assert.That(outerRsst.EntryCount, Is.EqualTo(5), "Outer RSST should have 5 column entries");
 
         // Verify nested structure: storage column → address-level RSST → inner RSST
-        Assert.That(outerRsst.TryGet([PersistedSnapshot.StorageTag], out ReadOnlySpan<byte> storageColumn), Is.True);
+        Assert.That(outerRsst.TryGet(PersistedSnapshot.StorageTag, out ReadOnlySpan<byte> storageColumn), Is.True);
         Rsst.Rsst addressRsst = new(storageColumn);
         Assert.That(addressRsst.EntryCount, Is.EqualTo(1), "Address-level RSST should have 1 address entry");
 
@@ -171,7 +171,7 @@ public class PersistedSnapshotTests
 
         // Verify nested structure
         Rsst.Rsst outerRsst = new(data);
-        Assert.That(outerRsst.TryGet([PersistedSnapshot.StorageNodeTag], out ReadOnlySpan<byte> snColumn), Is.True);
+        Assert.That(outerRsst.TryGet(PersistedSnapshot.StorageNodeTag, out ReadOnlySpan<byte> snColumn), Is.True);
         Rsst.Rsst hashRsst = new(snColumn);
         Assert.That(hashRsst.EntryCount, Is.EqualTo(1), "Hash-level RSST should have 1 entry");
         Assert.That(hashRsst.TryGet(address.Bytes, out ReadOnlySpan<byte> innerData), Is.True);
@@ -206,7 +206,7 @@ public class PersistedSnapshotTests
 
         // Verify grouping: address-level RSST should have 2 entries
         Rsst.Rsst outerRsst = new(data);
-        Assert.That(outerRsst.TryGet([PersistedSnapshot.StorageTag], out ReadOnlySpan<byte> storageColumn), Is.True);
+        Assert.That(outerRsst.TryGet(PersistedSnapshot.StorageTag, out ReadOnlySpan<byte> storageColumn), Is.True);
         Rsst.Rsst addressRsst = new(storageColumn);
         Assert.That(addressRsst.EntryCount, Is.EqualTo(2), "Address-level RSST should have 2 address entries");
 

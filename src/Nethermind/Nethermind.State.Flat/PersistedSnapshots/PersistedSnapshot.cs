@@ -24,11 +24,11 @@ namespace Nethermind.State.Flat.PersistedSnapshots;
 public sealed class PersistedSnapshot : RefCountingDisposable
 {
     // Tag prefixes for RSST key encoding
-    internal const byte AccountTag = 0x00;
-    internal const byte StorageTag = 0x01;
-    internal const byte SelfDestructTag = 0x02;
-    internal const byte StateNodeTag = 0x03;
-    internal const byte StorageNodeTag = 0x04;
+    internal static readonly byte[] AccountTag = [0x00];
+    internal static readonly byte[] StorageTag = [0x01];
+    internal static readonly byte[] SelfDestructTag = [0x02];
+    internal static readonly byte[] StateNodeTag = [0x03];
+    internal static readonly byte[] StorageNodeTag = [0x04];
 
     private readonly Memory<byte> _data;
     private readonly IDisposable? _dataOwner;
@@ -92,24 +92,20 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         return TryGetNestedValue(StorageNodeTag, address.Bytes, pathKey);
     }
 
-    private byte[]? TryGetFromColumn(byte tag, ReadOnlySpan<byte> entityKey)
+    private byte[]? TryGetFromColumn(ReadOnlySpan<byte> tag, ReadOnlySpan<byte> entityKey)
     {
         Rsst.Rsst outer = new(_data.Span);
-        Span<byte> tagKey = stackalloc byte[1];
-        tagKey[0] = tag;
-        if (!outer.TryGet(tagKey, out ReadOnlySpan<byte> columnData))
+        if (!outer.TryGet(tag, out ReadOnlySpan<byte> columnData))
             return null;
 
         Rsst.Rsst inner = new(columnData);
         return inner.TryGet(entityKey, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
     }
 
-    private byte[]? TryGetNestedValue(byte tag, ReadOnlySpan<byte> addressKey, ReadOnlySpan<byte> entityKey)
+    private byte[]? TryGetNestedValue(ReadOnlySpan<byte> tag, ReadOnlySpan<byte> addressKey, ReadOnlySpan<byte> entityKey)
     {
         Rsst.Rsst outer = new(_data.Span);
-        Span<byte> tagSpan = stackalloc byte[1];
-        tagSpan[0] = tag;
-        if (!outer.TryGet(tagSpan, out ReadOnlySpan<byte> columnData)) return null;
+        if (!outer.TryGet(tag, out ReadOnlySpan<byte> columnData)) return null;
 
         Rsst.Rsst addressLevel = new(columnData);
         if (!addressLevel.TryGet(addressKey, out ReadOnlySpan<byte> innerData)) return null;

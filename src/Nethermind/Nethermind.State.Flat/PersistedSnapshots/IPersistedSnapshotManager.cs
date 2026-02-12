@@ -7,4 +7,5 @@ public interface IPersistedSnapshotManager
 {
     void ConvertToPersistedSnapshot(Snapshot snapshot);
     void PrunePersistedSnapshots(StateId currentPersistedState);
+    PersistedSnapshot? TryGetOldestSnapshot(StateId currentPersistedState);
 }

@@ -394,11 +394,8 @@ public class PersistenceManager(
 
         using (IPersistence.IWriteBatch batch = persistence.CreateWriteBatch(snapshot.From, snapshot.To))
         {
-            byte[] tagKey = new byte[1];
-
             // SelfDestruct column (0x02)
-            tagKey[0] = PersistedSnapshot.SelfDestructTag;
-            if (outer.TryGet(tagKey, out ReadOnlySpan<byte> sdColumn))
+            if (outer.TryGet(PersistedSnapshot.SelfDestructTag, out ReadOnlySpan<byte> sdColumn))
             {
                 Rsst.Rsst sdRsst = new(sdColumn);
                 using Rsst.Rsst.Enumerator sdEnum = sdRsst.GetEnumerator();
@@ -410,8 +407,7 @@ public class PersistenceManager(
             }
 
             // Account column (0x00)
-            tagKey[0] = PersistedSnapshot.AccountTag;
-            if (outer.TryGet(tagKey, out ReadOnlySpan<byte> accountColumn))
+            if (outer.TryGet(PersistedSnapshot.AccountTag, out ReadOnlySpan<byte> accountColumn))
             {
                 Rsst.Rsst accountRsst = new(accountColumn);
                 using Rsst.Rsst.Enumerator accountEnum = accountRsst.GetEnumerator();
@@ -431,8 +427,7 @@ public class PersistenceManager(
             }
 
             // Storage column (0x01) - nested: Address(20) → inner RSST(Slot(32) → SlotValue)
-            tagKey[0] = PersistedSnapshot.StorageTag;
-            if (outer.TryGet(tagKey, out ReadOnlySpan<byte> storageColumn))
+            if (outer.TryGet(PersistedSnapshot.StorageTag, out ReadOnlySpan<byte> storageColumn))
             {
                 Rsst.Rsst addressLevel = new(storageColumn);
                 using Rsst.Rsst.Enumerator addrEnum = addressLevel.GetEnumerator();
@@ -458,8 +453,7 @@ public class PersistenceManager(
             }
 
             // StateNode column (0x03): TreePath(32) + PathLength(1) → RLP
-            tagKey[0] = PersistedSnapshot.StateNodeTag;
-            if (outer.TryGet(tagKey, out ReadOnlySpan<byte> stateNodeColumn))
+            if (outer.TryGet(PersistedSnapshot.StateNodeTag, out ReadOnlySpan<byte> stateNodeColumn))
             {
                 Rsst.Rsst stateNodeRsst = new(stateNodeColumn);
                 using Rsst.Rsst.Enumerator nodeEnum = stateNodeRsst.GetEnumerator();
@@ -473,8 +467,7 @@ public class PersistenceManager(
             }
 
             // StorageNode column (0x04) - nested: AddressHash(32) → inner RSST(TreePath(33) → RLP)
-            tagKey[0] = PersistedSnapshot.StorageNodeTag;
-            if (outer.TryGet(tagKey, out ReadOnlySpan<byte> storageNodeColumn))
+            if (outer.TryGet(PersistedSnapshot.StorageNodeTag, out ReadOnlySpan<byte> storageNodeColumn))
             {
                 Rsst.Rsst hashLevel = new(storageNodeColumn);
                 using Rsst.Rsst.Enumerator hashEnum = hashLevel.GetEnumerator();

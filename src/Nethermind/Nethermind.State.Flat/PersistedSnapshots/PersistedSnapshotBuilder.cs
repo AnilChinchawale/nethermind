@@ -99,8 +99,7 @@ public static class PersistedSnapshotBuilder
             }
 
             int innerLen = inner.Build();
-            ReadOnlySpan<byte> accountTag = new byte[] { PersistedSnapshot.AccountTag };
-            outer.FinishValueWrite(innerLen, accountTag);
+            outer.FinishValueWrite(innerLen, PersistedSnapshot.AccountTag);
         }
     }
 
@@ -153,8 +152,7 @@ public static class PersistedSnapshotBuilder
             }
 
             int addrLen = addressLevel.Build();
-            ReadOnlySpan<byte> storageTag = new byte[] { PersistedSnapshot.StorageTag };
-            outer.FinishValueWrite(addrLen, storageTag);
+            outer.FinishValueWrite(addrLen, PersistedSnapshot.StorageTag);
         }
     }
 
@@ -178,8 +176,7 @@ public static class PersistedSnapshotBuilder
             }
 
             int innerLen = inner.Build();
-            ReadOnlySpan<byte> selfDestructTag = new byte[] { PersistedSnapshot.SelfDestructTag };
-            outer.FinishValueWrite(innerLen, selfDestructTag);
+            outer.FinishValueWrite(innerLen, PersistedSnapshot.SelfDestructTag);
         }
     }
 
@@ -211,8 +208,7 @@ public static class PersistedSnapshotBuilder
             }
 
             int innerLen = inner.Build();
-            ReadOnlySpan<byte> stateNodeTag = new byte[] { PersistedSnapshot.StateNodeTag };
-            outer.FinishValueWrite(innerLen, stateNodeTag);
+            outer.FinishValueWrite(innerLen, PersistedSnapshot.StateNodeTag);
         }
     }
 
@@ -260,8 +256,7 @@ public static class PersistedSnapshotBuilder
             }
 
             int hashLen = hashLevel.Build();
-            ReadOnlySpan<byte> storageNodeTag = new byte[] { PersistedSnapshot.StorageNodeTag };
-            outer.FinishValueWrite(hashLen, storageNodeTag);
+            outer.FinishValueWrite(hashLen, PersistedSnapshot.StorageNodeTag);
         }
     }
 }
