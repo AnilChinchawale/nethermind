@@ -11,6 +11,7 @@ using Nethermind.Core.Extensions;
 using Nethermind.Db;
 using Nethermind.Int256;
 using Nethermind.Logging;
+using Nethermind.Serialization.Rlp;
 using Nethermind.State.Flat.Persistence;
 using Nethermind.State.Flat.PersistedSnapshots;
 using Nethermind.Trie;
@@ -30,7 +31,8 @@ public class PersistenceManager(
 {
     private readonly ILogger _logger = logManager.GetClassLogger();
     private readonly int _minReorgDepth = configuration.MinReorgDepth;
-    private readonly int _maxReorgDepth = configuration.MaxReorgDepth;
+    private readonly int _maxInMemoryReorgDepth = configuration.MaxInMemoryReorgDepth;
+    private readonly int _longFinalityReorgDepth = configuration.LongFinalityReorgDepth;
     private readonly int _compactSize = configuration.CompactSize;
     private readonly List<(Hash256AsKey, TreePath)> _trieNodesSortBuffer = new(); // Presort make it faster
     private readonly Lock _persistenceLock = new();
@@ -143,32 +145,35 @@ public class PersistenceManager(
         return toConvert.ToArray();
     }
 
-    internal (Snapshot? ToPersist, Snapshot[]? ToConvert) DetermineSnapshotAction(StateId latestSnapshot)
+    internal (PersistedSnapshot? ToPersistPersistedSnapshot, Snapshot? ToPersist, Snapshot[]? ToConvert) DetermineSnapshotAction(StateId latestSnapshot)
     {
         long lastSnapshotNumber = latestSnapshot.BlockNumber;
 
         StateId currentPersistedState = GetCurrentPersistedStateId();
         long finalizedBlockNumber = finalizedStateProvider.FinalizedBlockNumber;
-        long inMemoryStateDepth = lastSnapshotNumber - currentPersistedState.BlockNumber;
-        if (inMemoryStateDepth - _compactSize < _minReorgDepth)
+        long snapshotsDepth = lastSnapshotNumber - currentPersistedState.BlockNumber;
+        if (snapshotsDepth - _compactSize < _minReorgDepth)
         {
             // Keep some state in memory
-            return (null, null);
+            return (null, null, null);
         }
 
         long afterPersistPersistedBlockNumber = currentPersistedState.BlockNumber + _compactSize;
         if (afterPersistPersistedBlockNumber > finalizedBlockNumber)
         {
-            if (inMemoryStateDepth <= _maxReorgDepth)
+            if (snapshotsDepth <= _maxInMemoryReorgDepth)
             {
-                // Unfinalized, and still under max reorg depth
-                return (null, null);
+                return (TryGetForcePersistedSnapshot(currentPersistedState, snapshotsDepth), null, null);
             }
 
             // Memory pressure with unfinalized state: convert to persisted snapshots instead of force-persisting to RocksDB
             if (_logger.IsWarn) _logger.Warn($"Very long unfinalized state. Converting to persisted snapshots. finalized block number is {finalizedBlockNumber}.");
             Snapshot[]? toConvert = CollectSnapshotsToConvert(currentPersistedState);
-            return (null, toConvert);
+            if (toConvert is not null)
+                return (null, null, toConvert);
+
+            // Nothing left to convert — check force-persist
+            return (TryGetForcePersistedSnapshot(currentPersistedState, snapshotsDepth), null, null);
         }
 
         Snapshot? snapshotToPersist =
@@ -180,7 +185,7 @@ public class PersistenceManager(
             if (_logger.IsWarn) _logger.Warn($"Unable to find snapshot to persist. Current persisted state {currentPersistedState}. Compact size {_compactSize}.");
         }
 
-        return (snapshotToPersist, null);
+        return (null, snapshotToPersist, null);
     }
 
     public void AddToPersistence(StateId latestSnapshot)
@@ -188,7 +193,7 @@ public class PersistenceManager(
         using Lock.Scope scope = _persistenceLock.EnterScope();
         while (true)
         {
-            (Snapshot? toPersist, Snapshot[]? toConvert) = DetermineSnapshotAction(latestSnapshot);
+            (PersistedSnapshot? persistedToPersist, Snapshot? toPersist, Snapshot[]? toConvert) = DetermineSnapshotAction(latestSnapshot);
 
             if (toPersist is not null)
             {
@@ -205,7 +210,14 @@ public class PersistenceManager(
                     persistedSnapshotManager.ConvertToPersistedSnapshot(snapshot);
                 }
                 snapshotRepository.RemoveStatesUntil(toConvert[^1].To);
-                break; // Don't loop — conversion is not persistence
+                // Continue loop — DetermineSnapshotAction will check for force-persist next iteration
+            }
+            else if (persistedToPersist is not null)
+            {
+                using PersistedSnapshot _ = persistedToPersist;
+                PersistPersistedSnapshot(persistedToPersist);
+                _currentPersistedStateId = persistedToPersist.To;
+                persistedSnapshotManager.PrunePersistedSnapshots(_currentPersistedStateId);
             }
             else
             {
@@ -361,6 +373,125 @@ public class PersistenceManager(
 
             Metrics.FlatPersistenceSnapshotSize.Observe(stateNodesSize, labels: new StringLabel("state_nodes"));
             Metrics.FlatPersistenceSnapshotSize.Observe(storageNodesSize, labels: new StringLabel("storage_nodes"));
+        }
+
+        Metrics.FlatPersistenceTime.Observe(Stopwatch.GetTimestamp() - sw);
+    }
+
+    private PersistedSnapshot? TryGetForcePersistedSnapshot(StateId currentPersistedState, long totalDepth)
+    {
+        if (totalDepth <= _longFinalityReorgDepth) return null;
+        PersistedSnapshot? oldest = persistedSnapshotManager.TryGetOldestSnapshot(currentPersistedState);
+        if (oldest is not null && _logger.IsWarn)
+            _logger.Warn($"Total reorg depth {totalDepth} exceeds LongFinalityReorgDepth {_longFinalityReorgDepth}. Force persisting persisted snapshot {oldest.From} -> {oldest.To}.");
+        return oldest;
+    }
+
+    internal void PersistPersistedSnapshot(PersistedSnapshot snapshot)
+    {
+        long sw = Stopwatch.GetTimestamp();
+        Rsst.Rsst outer = new(snapshot.Data.Span);
+
+        using (IPersistence.IWriteBatch batch = persistence.CreateWriteBatch(snapshot.From, snapshot.To))
+        {
+            byte[] tagKey = new byte[1];
+
+            // SelfDestruct column (0x02)
+            tagKey[0] = PersistedSnapshot.SelfDestructTag;
+            if (outer.TryGet(tagKey, out ReadOnlySpan<byte> sdColumn))
+            {
+                Rsst.Rsst sdRsst = new(sdColumn);
+                using Rsst.Rsst.Enumerator sdEnum = sdRsst.GetEnumerator();
+                while (sdEnum.MoveNext())
+                {
+                    if (sdEnum.Current.Value.IsEmpty) // destructed
+                        batch.SelfDestruct(new Address(sdEnum.Current.Key.ToArray()));
+                }
+            }
+
+            // Account column (0x00)
+            tagKey[0] = PersistedSnapshot.AccountTag;
+            if (outer.TryGet(tagKey, out ReadOnlySpan<byte> accountColumn))
+            {
+                Rsst.Rsst accountRsst = new(accountColumn);
+                using Rsst.Rsst.Enumerator accountEnum = accountRsst.GetEnumerator();
+                while (accountEnum.MoveNext())
+                {
+                    Address addr = new(accountEnum.Current.Key.ToArray());
+                    if (accountEnum.Current.Value.IsEmpty)
+                    {
+                        batch.SetAccount(addr, null);
+                    }
+                    else
+                    {
+                        Account? account = AccountDecoder.Slim.Decode(new RlpStream(accountEnum.Current.Value.ToArray()));
+                        batch.SetAccount(addr, account);
+                    }
+                }
+            }
+
+            // Storage column (0x01) - nested: Address(20) → inner RSST(Slot(32) → SlotValue)
+            tagKey[0] = PersistedSnapshot.StorageTag;
+            if (outer.TryGet(tagKey, out ReadOnlySpan<byte> storageColumn))
+            {
+                Rsst.Rsst addressLevel = new(storageColumn);
+                using Rsst.Rsst.Enumerator addrEnum = addressLevel.GetEnumerator();
+                while (addrEnum.MoveNext())
+                {
+                    Address addr = new(addrEnum.Current.Key.ToArray());
+                    Rsst.Rsst innerRsst = new(addrEnum.Current.Value);
+                    using Rsst.Rsst.Enumerator slotEnum = innerRsst.GetEnumerator();
+                    while (slotEnum.MoveNext())
+                    {
+                        UInt256 slot = new(slotEnum.Current.Key, isBigEndian: true);
+                        if (slotEnum.Current.Value.IsEmpty)
+                        {
+                            batch.SetStorage(addr, slot, null);
+                        }
+                        else
+                        {
+                            SlotValue value = SlotValue.FromSpanWithoutLeadingZero(slotEnum.Current.Value);
+                            batch.SetStorage(addr, slot, value);
+                        }
+                    }
+                }
+            }
+
+            // StateNode column (0x03): TreePath(32) + PathLength(1) → RLP
+            tagKey[0] = PersistedSnapshot.StateNodeTag;
+            if (outer.TryGet(tagKey, out ReadOnlySpan<byte> stateNodeColumn))
+            {
+                Rsst.Rsst stateNodeRsst = new(stateNodeColumn);
+                using Rsst.Rsst.Enumerator nodeEnum = stateNodeRsst.GetEnumerator();
+                while (nodeEnum.MoveNext())
+                {
+                    ReadOnlySpan<byte> key = nodeEnum.Current.Key;
+                    TreePath path = new(new ValueHash256(key[..32]), key[32]);
+                    TrieNode node = new(NodeType.Unknown, nodeEnum.Current.Value.ToArray());
+                    batch.SetStateTrieNode(path, node);
+                }
+            }
+
+            // StorageNode column (0x04) - nested: AddressHash(32) → inner RSST(TreePath(33) → RLP)
+            tagKey[0] = PersistedSnapshot.StorageNodeTag;
+            if (outer.TryGet(tagKey, out ReadOnlySpan<byte> storageNodeColumn))
+            {
+                Rsst.Rsst hashLevel = new(storageNodeColumn);
+                using Rsst.Rsst.Enumerator hashEnum = hashLevel.GetEnumerator();
+                while (hashEnum.MoveNext())
+                {
+                    Hash256 addressHash = new(hashEnum.Current.Key.ToArray());
+                    Rsst.Rsst innerRsst = new(hashEnum.Current.Value);
+                    using Rsst.Rsst.Enumerator pathEnum = innerRsst.GetEnumerator();
+                    while (pathEnum.MoveNext())
+                    {
+                        ReadOnlySpan<byte> pathKey = pathEnum.Current.Key;
+                        TreePath path = new(new ValueHash256(pathKey[..32]), pathKey[32]);
+                        TrieNode node = new(NodeType.Unknown, pathEnum.Current.Value.ToArray());
+                        batch.SetStorageTrieNode(addressHash, path, node);
+                    }
+                }
+            }
         }
 
         Metrics.FlatPersistenceTime.Observe(Stopwatch.GetTimestamp() - sw);

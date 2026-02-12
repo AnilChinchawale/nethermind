@@ -37,7 +37,8 @@ public class PersistenceManagerTests
         {
             CompactSize = 16,
             MinReorgDepth = 64,
-            MaxReorgDepth = 256
+            MaxInMemoryReorgDepth = 256,
+            LongFinalityReorgDepth = 90000
         };
 
         _resourcePool = new ResourcePool(_config);
@@ -105,8 +106,9 @@ public class PersistenceManagerTests
         StateId latest = CreateStateId(60);
         _finalizedStateProvider.SetFinalizedBlockNumber(100);
 
-        (Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
+        (PersistedSnapshot? persistedToPersist, Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
 
+        Assert.That(persistedToPersist, Is.Null);
         Assert.That(toPersist, Is.Null);
         Assert.That(toConvert, Is.Null);
     }
@@ -129,8 +131,9 @@ public class PersistenceManagerTests
         // Create snapshot (compacted or not based on parameter)
         using Snapshot expectedSnapshot = CreateSnapshot(persisted, target, compacted: useCompacted);
 
-        (Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
+        (PersistedSnapshot? persistedToPersist, Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
 
+        Assert.That(persistedToPersist, Is.Null);
         Assert.That(toPersist, Is.Not.Null);
         Assert.That(toConvert, Is.Null);
         Assert.That(toPersist!.From, Is.EqualTo(persisted));
@@ -149,8 +152,9 @@ public class PersistenceManagerTests
         StateId latest = CreateStateId(150);
         _finalizedStateProvider.SetFinalizedBlockNumber(10);
 
-        (Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
+        (PersistedSnapshot? persistedToPersist, Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
 
+        Assert.That(persistedToPersist, Is.Null);
         Assert.That(toPersist, Is.Null);
         Assert.That(toConvert, Is.Null);
     }
@@ -170,8 +174,9 @@ public class PersistenceManagerTests
         // Create non-compacted snapshot chain from persisted state
         using Snapshot expectedSnapshot = CreateSnapshot(persisted, target, compacted: false);
 
-        (Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
+        (PersistedSnapshot? persistedToPersist, Snapshot? toPersist, Snapshot[]? toConvert) = _persistenceManager.DetermineSnapshotAction(latest);
 
+        Assert.That(persistedToPersist, Is.Null);
         Assert.That(toPersist, Is.Null);
         Assert.That(toConvert, Is.Not.Null);
         Assert.That(toConvert!.Length, Is.GreaterThan(0));
@@ -190,8 +195,9 @@ public class PersistenceManagerTests
 
         // Don't create any snapshots
 
-        (Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
+        (PersistedSnapshot? persistedToPersist, Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
 
+        Assert.That(persistedToPersist, Is.Null);
         Assert.That(toPersist, Is.Null);
     }
 
@@ -209,8 +215,9 @@ public class PersistenceManagerTests
         // Create snapshot with wrong "from" state
         using Snapshot wrongSnapshot = CreateSnapshot(wrongFrom, target, compacted: true);
 
-        (Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
+        (PersistedSnapshot? persistedToPersist, Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
 
+        Assert.That(persistedToPersist, Is.Null);
         Assert.That(toPersist, Is.Null);
     }
 
@@ -229,8 +236,9 @@ public class PersistenceManagerTests
         using Snapshot snapshot1 = CreateSnapshot(persisted, target1, compacted: true);
         using Snapshot snapshot2 = CreateSnapshot(persisted, target2, compacted: true);
 
-        (Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
+        (PersistedSnapshot? persistedToPersist, Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
 
+        Assert.That(persistedToPersist, Is.Null);
         Assert.That(toPersist, Is.Not.Null);
         Assert.That(toPersist!.To.StateRoot.Bytes.ToArray(), Is.EqualTo(target2.StateRoot.Bytes.ToArray()));
 
@@ -246,8 +254,9 @@ public class PersistenceManagerTests
         StateId latest = CreateStateId(79);
         _finalizedStateProvider.SetFinalizedBlockNumber(100);
 
-        (Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
+        (PersistedSnapshot? persistedToPersist, Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
 
+        Assert.That(persistedToPersist, Is.Null);
         Assert.That(toPersist, Is.Null);
     }
 
@@ -264,8 +273,9 @@ public class PersistenceManagerTests
 
         using Snapshot expectedSnapshot = CreateSnapshot(persisted, target, compacted: true);
 
-        (Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
+        (PersistedSnapshot? persistedToPersist, Snapshot? toPersist, _) = _persistenceManager.DetermineSnapshotAction(latest);
 
+        Assert.That(persistedToPersist, Is.Null);
         Assert.That(toPersist, Is.Not.Null);
 
         toPersist!.Dispose();
