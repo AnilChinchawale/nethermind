@@ -316,10 +316,10 @@ public class StorageLayerTests
         byte[] readBack = manager.Read(location);
         PersistedSnapshot persisted = new(id, from, to, PersistedSnapshotType.Base, readBack);
 
-        byte[]? accountRlp = persisted.TryGetAccount(Core.Test.Builders.TestItem.AddressA);
-        Assert.That(accountRlp, Is.Not.Null);
+        bool hasAccount = persisted.TryGetAccount(Core.Test.Builders.TestItem.AddressA, out ReadOnlySpan<byte> rlp);
+        Assert.That(hasAccount, Is.True);
 
-        Serialization.Rlp.Rlp.ValueDecoderContext ctx = new(accountRlp);
+        Serialization.Rlp.Rlp.ValueDecoderContext ctx = new(rlp);
         Core.Account decoded = Serialization.Rlp.AccountDecoder.Slim.Decode(ref ctx)!;
         Assert.That(decoded.Balance, Is.EqualTo((Int256.UInt256)42));
     }
