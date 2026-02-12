@@ -328,51 +328,6 @@ public sealed class PersistedSnapshotRepository : IPersistedSnapshotRepository
     }
 
     /// <summary>
-    /// Find the snapshot whose From matches the given state. Tries compacted first (larger range = faster catch-up), then base.
-    /// </summary>
-    public PersistedSnapshot? TryGetSnapshotFrom(StateId fromState)
-    {
-        lock (_lock)
-        {
-            foreach (PersistedSnapshot snapshot in _compactedSnapshots.Values)
-            {
-                if (snapshot.From == fromState && snapshot.TryAcquire())
-                    return snapshot;
-            }
-
-            foreach (PersistedSnapshot snapshot in _baseSnapshots.Values)
-            {
-                if (snapshot.From == fromState && snapshot.TryAcquire())
-                    return snapshot;
-            }
-
-            return null;
-        }
-    }
-
-    public bool TryLeaseSnapshotTo(StateId toState, [NotNullWhen(true)] out PersistedSnapshot? snapshot)
-    {
-        lock (_lock)
-        {
-            if (_baseSnapshots.TryGetValue(toState, out snapshot) && snapshot.TryAcquire())
-                return true;
-            snapshot = null;
-            return false;
-        }
-    }
-
-    public bool TryLeaseCompactedSnapshotTo(StateId toState, [NotNullWhen(true)] out PersistedSnapshot? snapshot)
-    {
-        lock (_lock)
-        {
-            if (_compactedSnapshots.TryGetValue(toState, out snapshot) && snapshot.TryAcquire())
-                return true;
-            snapshot = null;
-            return false;
-        }
-    }
-
-    /// <summary>
     /// Prune snapshots with To.BlockNumber before the given state.
     /// </summary>
     public int PruneBefore(StateId stateId)

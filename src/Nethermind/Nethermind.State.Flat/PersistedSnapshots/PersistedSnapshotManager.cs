@@ -119,9 +119,6 @@ public class PersistedSnapshotManager(
         }
     }
 
-    public PersistedSnapshot? TryGetOldestSnapshot(StateId currentPersistedState) =>
-        persistedSnapshotRepository.TryGetSnapshotFrom(currentPersistedState);
-
     /// <summary>
     /// Merge a list of persisted snapshots (oldest-first) into a single compacted byte[].
     /// Uses pairwise self-destruct-aware merge from oldest to newest.
