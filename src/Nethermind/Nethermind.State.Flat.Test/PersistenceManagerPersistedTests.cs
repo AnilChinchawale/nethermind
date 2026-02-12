@@ -74,12 +74,12 @@ public class PersistenceManagerPersistedTests
         PersistedSnapshot mergedSnapshot = new(2, s0, s2, PersistedSnapshotType.Compacted, merged);
 
         // State node should have newer value
-        byte[]? nodeRlp = mergedSnapshot.TryLoadStateNodeRlp(path);
-        Assert.That(nodeRlp, Is.EqualTo(rlpNewer));
+        Assert.That(mergedSnapshot.TryLoadStateNodeRlp(path, out ReadOnlySpan<byte> nodeRlp), Is.True);
+        Assert.That(nodeRlp.ToArray(), Is.EqualTo(rlpNewer));
 
         // Both accounts should be present
-        Assert.That(mergedSnapshot.TryGetAccount(TestItem.AddressA), Is.Not.Null);
-        Assert.That(mergedSnapshot.TryGetAccount(TestItem.AddressB), Is.Not.Null);
+        Assert.That(mergedSnapshot.TryGetAccount(TestItem.AddressA, out _), Is.True);
+        Assert.That(mergedSnapshot.TryGetAccount(TestItem.AddressB, out _), Is.True);
     }
 
     [Test]
@@ -111,8 +111,10 @@ public class PersistenceManagerPersistedTests
         PersistedSnapshot mergedSnapshot = new(2, s0, s2, PersistedSnapshotType.Compacted, merged);
 
         // Both paths should be present
-        Assert.That(mergedSnapshot.TryLoadStateNodeRlp(path1), Is.EqualTo(rlp1));
-        Assert.That(mergedSnapshot.TryLoadStateNodeRlp(path2), Is.EqualTo(rlp2));
+        Assert.That(mergedSnapshot.TryLoadStateNodeRlp(path1, out ReadOnlySpan<byte> rlp1Result), Is.True);
+        Assert.That(rlp1Result.ToArray(), Is.EqualTo(rlp1));
+        Assert.That(mergedSnapshot.TryLoadStateNodeRlp(path2, out ReadOnlySpan<byte> rlp2Result), Is.True);
+        Assert.That(rlp2Result.ToArray(), Is.EqualTo(rlp2));
     }
 
     [Test]
@@ -179,10 +181,10 @@ public class PersistenceManagerPersistedTests
         // The compacted snapshot should have all 4 accounts accessible
         PersistedSnapshot compacted = list[0];
         Assert.That(compacted.From, Is.EqualTo(s0));
-        Assert.That(compacted.TryGetAccount(TestItem.AddressA), Is.Not.Null);
-        Assert.That(compacted.TryGetAccount(TestItem.AddressB), Is.Not.Null);
-        Assert.That(compacted.TryGetAccount(TestItem.AddressC), Is.Not.Null);
-        Assert.That(compacted.TryGetAccount(TestItem.AddressD), Is.Not.Null);
+        Assert.That(compacted.TryGetAccount(TestItem.AddressA, out _), Is.True);
+        Assert.That(compacted.TryGetAccount(TestItem.AddressB, out _), Is.True);
+        Assert.That(compacted.TryGetAccount(TestItem.AddressC, out _), Is.True);
+        Assert.That(compacted.TryGetAccount(TestItem.AddressD, out _), Is.True);
     }
 
     [Test]
@@ -210,9 +212,9 @@ public class PersistenceManagerPersistedTests
         PersistedSnapshot result = new(2, s0, s2, PersistedSnapshotType.Compacted, merged);
 
         // Slot 1 from older should be gone (address was destructed)
-        Assert.That(result.TryGetSlot(TestItem.AddressA, 1), Is.Null);
+        Assert.That(result.TryGetSlot(TestItem.AddressA, 1, out _), Is.False);
         // Slot 2 from newer should be present (added after self-destruct)
-        Assert.That(result.TryGetSlot(TestItem.AddressA, 2), Is.Not.Null);
+        Assert.That(result.TryGetSlot(TestItem.AddressA, 2, out _), Is.True);
         // Self-destruct flag should be false (destructed)
         Assert.That(result.TryGetSelfDestructFlag(TestItem.AddressA), Is.EqualTo(false));
     }
@@ -272,7 +274,8 @@ public class PersistenceManagerPersistedTests
         PersistedSnapshot result = new(2, s0, s2, PersistedSnapshotType.Compacted, merged);
 
         // Storage trie nodes should still be present (not affected by self-destruct)
-        Assert.That(result.TryLoadStorageNodeRlp(addrHash, storagePath), Is.EqualTo(nodeRlp));
+        Assert.That(result.TryLoadStorageNodeRlp(addrHash, storagePath, out ReadOnlySpan<byte> loadedRlp), Is.True);
+        Assert.That(loadedRlp.ToArray(), Is.EqualTo(nodeRlp));
     }
 
     [Test]

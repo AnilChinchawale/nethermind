@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Utils;
@@ -51,18 +53,18 @@ public sealed class PersistedSnapshot : RefCountingDisposable
     }
 
 
-    public byte[]? TryGetAccount(Address address) =>
-        TryGetFromColumn(AccountTag, address.Bytes);
+    public bool TryGetAccount(Address address, [UnscopedRef] out ReadOnlySpan<byte> accountRlp) =>
+        TryGetFromColumn(AccountTag, address.Bytes, out accountRlp);
 
-    public byte[]? TryGetSlot(Address address, in UInt256 index)
+    public bool TryGetSlot(Address address, in UInt256 index, [UnscopedRef] out ReadOnlySpan<byte> slotValue)
     {
         Span<byte> slotKey = stackalloc byte[32];
         index.ToBigEndian(slotKey);
-        return TryGetNestedValue(StorageTag, address.Bytes, slotKey);
+        return TryGetNestedValue(StorageTag, address.Bytes, slotKey, out slotValue);
     }
 
     public bool IsSelfDestructed(Address address) =>
-        TryGetFromColumn(SelfDestructTag, address.Bytes) is not null;
+        TryGetFromColumn(SelfDestructTag, address.Bytes, out _);
 
     /// <summary>
     /// Get the self-destruct flag with boolean distinction.
@@ -71,47 +73,71 @@ public sealed class PersistedSnapshot : RefCountingDisposable
     /// </summary>
     public bool? TryGetSelfDestructFlag(Address address)
     {
-        byte[]? result = TryGetFromColumn(SelfDestructTag, address.Bytes);
-        if (result is null) return null;
-        return result.Length > 0 && result[0] == 0x01;
+        if (!TryGetFromColumn(SelfDestructTag, address.Bytes, out ReadOnlySpan<byte> value))
+            return null;
+        return value.Length > 0 && value[0] == 0x01;
     }
 
-    public byte[]? TryLoadStateNodeRlp(in TreePath path)
+    public bool TryLoadStateNodeRlp(scoped in TreePath path, out ReadOnlySpan<byte> nodeRlp)
     {
-        Span<byte> key = stackalloc byte[32 + 1];
+        Span<byte> key = stackalloc byte[33];
         path.Path.Bytes.CopyTo(key);
         key[32] = (byte)path.Length;
-        return TryGetFromColumn(StateNodeTag, key);
+        return TryGetFromColumn(StateNodeTag, key, out nodeRlp);
     }
 
-    public byte[]? TryLoadStorageNodeRlp(Hash256 address, in TreePath path)
+    public bool TryLoadStorageNodeRlp(Hash256 address, in TreePath path, scoped out ReadOnlySpan<byte> nodeRlp)
     {
         Span<byte> pathKey = stackalloc byte[33];
         path.Path.Bytes.CopyTo(pathKey);
         pathKey[32] = (byte)path.Length;
-        return TryGetNestedValue(StorageNodeTag, address.Bytes, pathKey);
+        return TryGetNestedValue(StorageNodeTag, address.Bytes, pathKey, out nodeRlp);
     }
 
-    private byte[]? TryGetFromColumn(ReadOnlySpan<byte> tag, ReadOnlySpan<byte> entityKey)
+    private unsafe bool TryGetFromColumn(scoped ReadOnlySpan<byte> tag, scoped ReadOnlySpan<byte> entityKey, scoped out ReadOnlySpan<byte> value)
     {
         Rsst.Rsst outer = new(_data.Span);
         if (!outer.TryGet(tag, out ReadOnlySpan<byte> columnData))
-            return null;
+        {
+            value = default;
+            return false;
+        }
 
-        Rsst.Rsst inner = new(columnData);
-        return inner.TryGet(entityKey, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
+        // columnData is a slice of _data, safe to use in nested Rsst
+        fixed (byte* ptr = columnData)
+        {
+            ReadOnlySpan<byte> safeColumnData = MemoryMarshal.CreateReadOnlySpan(ref Unsafe.AsRef<byte>(ptr), columnData.Length);
+            Rsst.Rsst inner = new(safeColumnData);
+            return inner.TryGet(entityKey, out value);
+        }
     }
 
-    private byte[]? TryGetNestedValue(ReadOnlySpan<byte> tag, ReadOnlySpan<byte> addressKey, ReadOnlySpan<byte> entityKey)
+    private unsafe bool TryGetNestedValue(scoped ReadOnlySpan<byte> tag, scoped ReadOnlySpan<byte> addressKey, scoped ReadOnlySpan<byte> entityKey, out ReadOnlySpan<byte> value)
     {
         Rsst.Rsst outer = new(_data.Span);
-        if (!outer.TryGet(tag, out ReadOnlySpan<byte> columnData)) return null;
+        if (!outer.TryGet(tag, out ReadOnlySpan<byte> columnData))
+        {
+            value = default;
+            return false;
+        }
 
-        Rsst.Rsst addressLevel = new(columnData);
-        if (!addressLevel.TryGet(addressKey, out ReadOnlySpan<byte> innerData)) return null;
+        fixed (byte* ptrColumn = columnData)
+        {
+            ReadOnlySpan<byte> safeColumnData = MemoryMarshal.CreateReadOnlySpan(ref Unsafe.AsRef<byte>(ptrColumn), columnData.Length);
+            Rsst.Rsst addressLevel = new(safeColumnData);
+            if (!addressLevel.TryGet(addressKey, out ReadOnlySpan<byte> innerData))
+            {
+                value = default;
+                return false;
+            }
 
-        Rsst.Rsst inner = new(innerData);
-        return inner.TryGet(entityKey, out ReadOnlySpan<byte> value) ? value.ToArray() : null;
+            fixed (byte* ptrInner = innerData)
+            {
+                ReadOnlySpan<byte> safeInnerData = MemoryMarshal.CreateReadOnlySpan(ref Unsafe.AsRef<byte>(ptrInner), innerData.Length);
+                Rsst.Rsst inner = new(safeInnerData);
+                return inner.TryGet(entityKey, out value);
+            }
+        }
     }
 
 

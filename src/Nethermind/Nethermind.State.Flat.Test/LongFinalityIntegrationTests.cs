@@ -88,8 +88,10 @@ public class LongFinalityIntegrationTests
         Assert.That(list.Count, Is.EqualTo(1));
 
         // Query all types through the individual persisted snapshot
-        Assert.That(list[0].TryLoadStateNodeRlp(statePath), Is.EqualTo(stateRlp));
-        Assert.That(list[0].TryLoadStorageNodeRlp(storageAddr, storagePath), Is.EqualTo(storageRlp));
+        Assert.That(list[0].TryLoadStateNodeRlp(statePath, out ReadOnlySpan<byte> stateResult), Is.True);
+        Assert.That(stateResult.ToArray(), Is.EqualTo(stateRlp));
+        Assert.That(list[0].TryLoadStorageNodeRlp(storageAddr, storagePath, out ReadOnlySpan<byte> storageResult), Is.True);
+        Assert.That(storageResult.ToArray(), Is.EqualTo(storageRlp));
     }
 
     [Test]
@@ -132,8 +134,10 @@ public class LongFinalityIntegrationTests
             byte[]? r1 = null, r2 = null;
             for (int i = list.Count - 1; i >= 0; i--)
             {
-                r1 ??= list[i].TryLoadStateNodeRlp(path1);
-                r2 ??= list[i].TryLoadStateNodeRlp(path2);
+                if (r1 is null && list[i].TryLoadStateNodeRlp(path1, out ReadOnlySpan<byte> temp1))
+                    r1 = temp1.ToArray();
+                if (r2 is null && list[i].TryLoadStateNodeRlp(path2, out ReadOnlySpan<byte> temp2))
+                    r2 = temp2.ToArray();
             }
             Assert.That(r1, Is.EqualTo(rlp1));
             Assert.That(r2, Is.EqualTo(rlp2));
@@ -175,14 +179,16 @@ public class LongFinalityIntegrationTests
         PersistedSnapshot mergedSnap = new(1, s0, s2, PersistedSnapshotType.Compacted, merged);
 
         // State node should have newer value
-        Assert.That(mergedSnap.TryLoadStateNodeRlp(statePath), Is.EqualTo(new byte[] { 0xC1, 0x80, 0x80 }));
+        Assert.That(mergedSnap.TryLoadStateNodeRlp(statePath, out ReadOnlySpan<byte> stateRlpResult), Is.True);
+        Assert.That(stateRlpResult.ToArray(), Is.EqualTo(new byte[] { 0xC1, 0x80, 0x80 }));
 
         // Storage node from older should be preserved
-        Assert.That(mergedSnap.TryLoadStorageNodeRlp(storageAddr, storagePath), Is.EqualTo(new byte[] { 0xC1, 0x80 }));
+        Assert.That(mergedSnap.TryLoadStorageNodeRlp(storageAddr, storagePath, out ReadOnlySpan<byte> storageRlpResult), Is.True);
+        Assert.That(storageRlpResult.ToArray(), Is.EqualTo(new byte[] { 0xC1, 0x80 }));
 
         // Both accounts should be present
-        Assert.That(mergedSnap.TryGetAccount(TestItem.AddressA), Is.Not.Null);
-        Assert.That(mergedSnap.TryGetAccount(TestItem.AddressB), Is.Not.Null);
+        Assert.That(mergedSnap.TryGetAccount(TestItem.AddressA, out _), Is.True);
+        Assert.That(mergedSnap.TryGetAccount(TestItem.AddressB, out _), Is.True);
     }
 
     [TestCase(10)]
@@ -308,8 +314,8 @@ public class LongFinalityIntegrationTests
         Snapshot empty = CreateSnapshot(s0, s1, _ => { });
         PersistedSnapshot persisted = repo.PersistSnapshot(empty);
 
-        Assert.That(persisted.TryGetAccount(TestItem.AddressA), Is.Null);
-        Assert.That(persisted.TryLoadStateNodeRlp(new TreePath(Keccak.Compute("any"), 4)), Is.Null);
+        Assert.That(persisted.TryGetAccount(TestItem.AddressA, out _), Is.False);
+        Assert.That(persisted.TryLoadStateNodeRlp(new TreePath(Keccak.Compute("any"), 4), out _), Is.False);
     }
 
     [Test]

@@ -65,8 +65,7 @@ public sealed class ReadOnlySnapshotBundle(
         long psw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
         for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
         {
-            byte[]? rlp = persistedSnapshots[i].TryGetAccount(address);
-            if (rlp is not null)
+            if (persistedSnapshots[i].TryGetAccount(address, out ReadOnlySpan<byte> rlp))
             {
                 if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - psw, _readAccountPersistedLabel);
                 Rlp.ValueDecoderContext ctx = new(rlp);
@@ -124,11 +123,10 @@ public sealed class ReadOnlySnapshotBundle(
         // Check persisted snapshots (newest-first) with self-destruct boundary
         for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
         {
-            byte[]? value = persistedSnapshots[i].TryGetSlot(address, index);
-            if (value is not null)
+            if (persistedSnapshots[i].TryGetSlot(address, index, out ReadOnlySpan<byte> value))
             {
                 if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - sw, _readStoragePersistedLabel);
-                return value;
+                return value.ToArray();
             }
 
             // Check self-destruct boundary: if destructed (false flag), storage was cleared
@@ -207,11 +205,10 @@ public sealed class ReadOnlySnapshotBundle(
         long sw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
         for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
         {
-            byte[]? rlp = persistedSnapshots[i].TryLoadStateNodeRlp(path);
-            if (rlp is not null)
+            if (persistedSnapshots[i].TryLoadStateNodeRlp(path, out ReadOnlySpan<byte> rlp))
             {
                 if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - sw, _readStateRlpPersistedLabel);
-                return rlp;
+                return rlp.ToArray();
             }
         }
 
@@ -230,11 +227,10 @@ public sealed class ReadOnlySnapshotBundle(
         long sw = recordDetailedMetrics ? Stopwatch.GetTimestamp() : 0;
         for (int i = persistedSnapshots.Count - 1; i >= 0; i--)
         {
-            byte[]? rlp = persistedSnapshots[i].TryLoadStorageNodeRlp(address, path);
-            if (rlp is not null)
+            if (persistedSnapshots[i].TryLoadStorageNodeRlp(address, path, out ReadOnlySpan<byte> rlp))
             {
                 if (recordDetailedMetrics) Metrics.ReadOnlySnapshotBundleTimes.Observe(Stopwatch.GetTimestamp() - sw, _readStorageRlpPersistedLabel);
-                return rlp;
+                return rlp.ToArray();
             }
         }
 

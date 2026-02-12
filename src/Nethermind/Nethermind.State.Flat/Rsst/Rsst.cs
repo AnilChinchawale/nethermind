@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 namespace Nethermind.State.Flat.Rsst;
@@ -56,7 +57,7 @@ public readonly ref struct Rsst
         }
     }
 
-    public bool TryGet(ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    public bool TryGet(scoped ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
     {
         if (_entryCount == 0 || _data.Length < 2)
         {
@@ -68,13 +69,13 @@ public readonly ref struct Rsst
         return SearchTree(indexRegion, key, out value);
     }
 
-    private bool SearchTree(ReadOnlySpan<byte> indexRegion, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    private bool SearchTree(ReadOnlySpan<byte> indexRegion, scoped ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
     {
         NodeHeader root = ReadNodeHeaderFromEnd(indexRegion);
         return SearchNode(indexRegion, indexRegion.Length - root.NodeSize, key, out value);
     }
 
-    private bool SearchNode(ReadOnlySpan<byte> indexRegion, int nodeOffset, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    private bool SearchNode(ReadOnlySpan<byte> indexRegion, int nodeOffset, scoped ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
     {
         ReadOnlySpan<byte> node = indexRegion[nodeOffset..];
         NodeHeader header = NodeHeader.Read(node);
@@ -85,7 +86,7 @@ public readonly ref struct Rsst
         return SearchInternal(indexRegion, node, header, key, out value);
     }
 
-    private bool SearchLeaf(ReadOnlySpan<byte> node, NodeHeader header, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    private bool SearchLeaf(ReadOnlySpan<byte> node, NodeHeader header, scoped ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
     {
         int lo = 0, hi = header.EntryCount - 1;
         while (lo <= hi)
@@ -117,7 +118,7 @@ public readonly ref struct Rsst
         return false;
     }
 
-    private bool VerifyAndReadEntry(int entryIndex, ReadOnlySpan<byte> node, NodeHeader header, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    private bool VerifyAndReadEntry(int entryIndex, ReadOnlySpan<byte> node, NodeHeader header, scoped ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
     {
         ReadOnlySpan<byte> separator = GetSeparator(node, entryIndex, header);
         int vlOffset = GetValueLengthOffset(node, entryIndex, header);
@@ -146,7 +147,7 @@ public readonly ref struct Rsst
         return true;
     }
 
-    private bool SearchInternal(ReadOnlySpan<byte> indexRegion, ReadOnlySpan<byte> node, NodeHeader header, ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
+    private bool SearchInternal(ReadOnlySpan<byte> indexRegion, ReadOnlySpan<byte> node, NodeHeader header, scoped ReadOnlySpan<byte> key, out ReadOnlySpan<byte> value)
     {
         int childIdx = 0;
         for (int i = 1; i < header.EntryCount; i++)

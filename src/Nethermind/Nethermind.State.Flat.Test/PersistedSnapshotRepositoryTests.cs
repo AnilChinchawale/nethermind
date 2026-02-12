@@ -61,8 +61,7 @@ public class PersistedSnapshotRepositoryTests
         Assert.That(repo.SnapshotCount, Is.EqualTo(1));
 
         // Query through the snapshot
-        byte[]? accountRlp = persisted.TryGetAccount(TestItem.AddressA);
-        Assert.That(accountRlp, Is.Not.Null);
+        Assert.That(persisted.TryGetAccount(TestItem.AddressA, out ReadOnlySpan<byte> accountRlp), Is.True);
 
         Rlp.ValueDecoderContext ctx = new(accountRlp);
         Account decoded = AccountDecoder.Slim.Decode(ref ctx)!;
@@ -98,13 +97,18 @@ public class PersistedSnapshotRepositoryTests
         using PersistedSnapshotList list = repo.AssembleSnapshots(s2, s0);
 
         // Should return newest value (rlp2) when queried newest-first
-        byte[]? result = null;
+        ReadOnlySpan<byte> result = default;
+        bool found = false;
         for (int i = list.Count - 1; i >= 0; i--)
         {
-            result = list[i].TryLoadStateNodeRlp(path);
-            if (result is not null) break;
+            if (list[i].TryLoadStateNodeRlp(path, out result))
+            {
+                found = true;
+                break;
+            }
         }
-        Assert.That(result, Is.EqualTo(rlp2));
+        Assert.That(found, Is.True);
+        Assert.That(result.ToArray(), Is.EqualTo(rlp2));
     }
 
     [Test]

@@ -62,8 +62,7 @@ public class PersistedSnapshotTests
         byte[] data = PersistedSnapshotBuilder.Build(snapshot);
 
         PersistedSnapshot persisted = new(1, from, to, PersistedSnapshotType.Base, data);
-        byte[]? accountRlp = persisted.TryGetAccount(addr);
-        Assert.That(accountRlp, Is.Not.Null);
+        Assert.That(persisted.TryGetAccount(addr, out ReadOnlySpan<byte> accountRlp), Is.True);
 
         // Decode and verify
         Rlp.ValueDecoderContext ctx = new(accountRlp);
@@ -71,7 +70,7 @@ public class PersistedSnapshotTests
         Assert.That(decoded.Balance, Is.EqualTo((UInt256)1000));
 
         // Missing address
-        Assert.That(persisted.TryGetAccount(TestItem.AddressB), Is.Null);
+        Assert.That(persisted.TryGetAccount(TestItem.AddressB, out _), Is.False);
     }
 
     [Test]
@@ -102,13 +101,12 @@ public class PersistedSnapshotTests
         Assert.That(innerRsst.EntryCount, Is.EqualTo(1), "Inner RSST should have 1 slot entry");
 
         PersistedSnapshot persisted = new(1, from, to, PersistedSnapshotType.Base, data);
-        byte[]? slotBytes = persisted.TryGetSlot(addr, slot);
-        Assert.That(slotBytes, Is.Not.Null);
-        Assert.That(slotBytes!.Length, Is.GreaterThan(0));
+        Assert.That(persisted.TryGetSlot(addr, slot, out ReadOnlySpan<byte> slotBytes), Is.True);
+        Assert.That(slotBytes.Length, Is.GreaterThan(0));
 
         // Missing slot
-        Assert.That(persisted.TryGetSlot(addr, (UInt256)999), Is.Null);
-        Assert.That(persisted.TryGetSlot(TestItem.AddressB, slot), Is.Null);
+        Assert.That(persisted.TryGetSlot(addr, (UInt256)999, out _), Is.False);
+        Assert.That(persisted.TryGetSlot(TestItem.AddressB, slot, out _), Is.False);
     }
 
     [Test]
@@ -144,13 +142,12 @@ public class PersistedSnapshotTests
         byte[] data = PersistedSnapshotBuilder.Build(snapshot);
 
         PersistedSnapshot persisted = new(1, from, to, PersistedSnapshotType.Base, data);
-        byte[]? loadedRlp = persisted.TryLoadStateNodeRlp(path);
-        Assert.That(loadedRlp, Is.Not.Null);
-        Assert.That(loadedRlp, Is.EqualTo(nodeRlp));
+        Assert.That(persisted.TryLoadStateNodeRlp(path, out ReadOnlySpan<byte> loadedRlp), Is.True);
+        Assert.That(loadedRlp.ToArray(), Is.EqualTo(nodeRlp));
 
         // Missing path
         TreePath otherPath = new(Keccak.Compute("other"), 3);
-        Assert.That(persisted.TryLoadStateNodeRlp(otherPath), Is.Null);
+        Assert.That(persisted.TryLoadStateNodeRlp(otherPath, out _), Is.False);
     }
 
     [Test]
@@ -179,9 +176,8 @@ public class PersistedSnapshotTests
         Assert.That(innerRsst.EntryCount, Is.EqualTo(1), "Inner RSST should have 1 path entry");
 
         PersistedSnapshot persisted = new(1, from, to, PersistedSnapshotType.Base, data);
-        byte[]? loadedRlp = persisted.TryLoadStorageNodeRlp(address, path);
-        Assert.That(loadedRlp, Is.Not.Null);
-        Assert.That(loadedRlp, Is.EqualTo(nodeRlp));
+        Assert.That(persisted.TryLoadStorageNodeRlp(address, path, out ReadOnlySpan<byte> loadedRlp), Is.True);
+        Assert.That(loadedRlp.ToArray(), Is.EqualTo(nodeRlp));
     }
 
     [Test]
@@ -219,11 +215,11 @@ public class PersistedSnapshotTests
 
         // Verify round-trip reads
         PersistedSnapshot persisted = new(1, from, to, PersistedSnapshotType.Base, data);
-        Assert.That(persisted.TryGetSlot(addrA, (UInt256)1), Is.Not.Null);
-        Assert.That(persisted.TryGetSlot(addrA, (UInt256)2), Is.Not.Null);
-        Assert.That(persisted.TryGetSlot(addrB, (UInt256)5), Is.Not.Null);
-        Assert.That(persisted.TryGetSlot(addrA, (UInt256)5), Is.Null);
-        Assert.That(persisted.TryGetSlot(addrB, (UInt256)1), Is.Null);
+        Assert.That(persisted.TryGetSlot(addrA, (UInt256)1, out _), Is.True);
+        Assert.That(persisted.TryGetSlot(addrA, (UInt256)2, out _), Is.True);
+        Assert.That(persisted.TryGetSlot(addrB, (UInt256)5, out _), Is.True);
+        Assert.That(persisted.TryGetSlot(addrA, (UInt256)5, out _), Is.False);
+        Assert.That(persisted.TryGetSlot(addrB, (UInt256)1, out _), Is.False);
     }
 
     [Test]
@@ -262,19 +258,16 @@ public class PersistedSnapshotTests
         PersistedSnapshot persisted = new(1, s0, s2, PersistedSnapshotType.Base, merged);
 
         // addrA slot 1 should be overridden to val3
-        byte[]? slot1 = persisted.TryGetSlot(addrA, (UInt256)1);
-        Assert.That(slot1, Is.Not.Null);
-        Assert.That(slot1![0], Is.EqualTo(0x03));
+        Assert.That(persisted.TryGetSlot(addrA, (UInt256)1, out ReadOnlySpan<byte> slot1), Is.True);
+        Assert.That(slot1[0], Is.EqualTo(0x03));
 
         // addrA slot 2 should be val2 (from newer)
-        byte[]? slot2 = persisted.TryGetSlot(addrA, (UInt256)2);
-        Assert.That(slot2, Is.Not.Null);
-        Assert.That(slot2![0], Is.EqualTo(0x02));
+        Assert.That(persisted.TryGetSlot(addrA, (UInt256)2, out ReadOnlySpan<byte> slot2), Is.True);
+        Assert.That(slot2[0], Is.EqualTo(0x02));
 
         // addrB slot 5 should be val2 (from older, carried through)
-        byte[]? slot5 = persisted.TryGetSlot(addrB, (UInt256)5);
-        Assert.That(slot5, Is.Not.Null);
-        Assert.That(slot5![0], Is.EqualTo(0x02));
+        Assert.That(persisted.TryGetSlot(addrB, (UInt256)5, out ReadOnlySpan<byte> slot5), Is.True);
+        Assert.That(slot5[0], Is.EqualTo(0x02));
     }
 
     [Test]
@@ -316,14 +309,19 @@ public class PersistedSnapshotTests
 
         // Ordered oldest-first; query newest-first via indexer
         PersistedSnapshotList list = new([p1, p2]);
-        byte[]? result = null;
+        ReadOnlySpan<byte> result = default;
+        bool found = false;
         for (int i = list.Count - 1; i >= 0; i--)
         {
-            result = list[i].TryLoadStateNodeRlp(path);
-            if (result is not null) break;
+            if (list[i].TryLoadStateNodeRlp(path, out result))
+            {
+                found = true;
+                break;
+            }
         }
 
         // Should return the newest (p2) value
-        Assert.That(result, Is.EqualTo(rlp2));
+        Assert.That(found, Is.True);
+        Assert.That(result.ToArray(), Is.EqualTo(rlp2));
     }
 }
