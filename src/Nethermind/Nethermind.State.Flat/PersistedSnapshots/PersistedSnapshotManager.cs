@@ -119,6 +119,9 @@ public class PersistedSnapshotManager(
         }
     }
 
+    public PersistedSnapshot? TryGetOldestSnapshot(StateId currentPersistedState) =>
+        persistedSnapshotRepository.TryGetSnapshotFrom(currentPersistedState);
+
     /// <summary>
     /// Merge a list of persisted snapshots (oldest-first) into a single compacted byte[].
     /// Uses pairwise self-destruct-aware merge from oldest to newest.
@@ -175,9 +178,8 @@ public class PersistedSnapshotManager(
         Rsst.Rsst newerOuter = new(newerData);
 
         // Pre-extract destructed addresses from newer self-destruct column
-        byte[] sdTagKey = [PersistedSnapshot.SelfDestructTag];
-        bool hasSdTag = newerOuter.TryGet(sdTagKey, out ReadOnlySpan<byte> newerSd);
-        Debug.Assert(hasSdTag, $"Missing required tag 0x{PersistedSnapshot.SelfDestructTag:X2} in persisted snapshot");
+        bool hasSdTag = newerOuter.TryGet(PersistedSnapshot.SelfDestructTag, out ReadOnlySpan<byte> newerSd);
+        Debug.Assert(hasSdTag, $"Missing required tag 0x{PersistedSnapshot.SelfDestructTag[0]:X2} in persisted snapshot");
         HashSet<byte[]> destructedAddresses = new(Bytes.EqualityComparer);
         Rsst.Rsst sdRsst = new(newerSd);
         using Rsst.Rsst.Enumerator sdEnum = sdRsst.GetEnumerator();
@@ -188,7 +190,7 @@ public class PersistedSnapshotManager(
         }
 
         using RsstBuilder outerBuilder = new(output);
-        ReadOnlySpan<byte> tags = [
+        byte[][] tags = [
             PersistedSnapshot.AccountTag,
             PersistedSnapshot.StorageTag,
             PersistedSnapshot.SelfDestructTag,
@@ -196,26 +198,24 @@ public class PersistedSnapshotManager(
             PersistedSnapshot.StorageNodeTag
         ];
 
-        byte[] tagKey = new byte[1];
-        foreach (byte tag in tags)
+        foreach (byte[] tag in tags)
         {
-            tagKey[0] = tag;
-            bool hasOlder = olderOuter.TryGet(tagKey, out ReadOnlySpan<byte> olderColumn);
-            bool hasNewer = newerOuter.TryGet(tagKey, out ReadOnlySpan<byte> newerColumn);
-            Debug.Assert(hasOlder && hasNewer, $"Missing required tag 0x{tag:X2} in persisted snapshot");
+            bool hasOlder = olderOuter.TryGet(tag, out ReadOnlySpan<byte> olderColumn);
+            bool hasNewer = newerOuter.TryGet(tag, out ReadOnlySpan<byte> newerColumn);
+            Debug.Assert(hasOlder && hasNewer, $"Missing required tag 0x{tag[0]:X2} in persisted snapshot");
 
             int maxColumnSize = olderColumn.Length + newerColumn.Length + 1024;
             Span<byte> valueSpan = outerBuilder.BeginValueWrite(maxColumnSize);
 
-            int columnLen = tag switch
+            int columnLen = tag[0] switch
             {
-                PersistedSnapshot.StorageTag => NestedStreamingMergeWithSelfDestruct(olderColumn, newerColumn, valueSpan, destructedAddresses),
-                PersistedSnapshot.SelfDestructTag => SelfDestructMerge(olderColumn, newerColumn, valueSpan),
-                PersistedSnapshot.StorageNodeTag => NestedStreamingMerge(olderColumn, newerColumn, valueSpan),
+                0x01 => NestedStreamingMergeWithSelfDestruct(olderColumn, newerColumn, valueSpan, destructedAddresses),
+                0x02 => SelfDestructMerge(olderColumn, newerColumn, valueSpan),
+                0x04 => NestedStreamingMerge(olderColumn, newerColumn, valueSpan),
                 _ => RsstBuilder.StreamingMerge(olderColumn, newerColumn, valueSpan, 0),
             };
 
-            outerBuilder.FinishValueWrite(columnLen, tagKey);
+            outerBuilder.FinishValueWrite(columnLen, tag);
         }
 
         return outerBuilder.Build();
