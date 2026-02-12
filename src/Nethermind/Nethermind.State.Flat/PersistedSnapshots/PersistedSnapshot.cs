@@ -3,7 +3,6 @@
 
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Utils;
@@ -94,7 +93,7 @@ public sealed class PersistedSnapshot : RefCountingDisposable
         return TryGetNestedValue(StorageNodeTag, address.Bytes, pathKey, out nodeRlp);
     }
 
-    private unsafe bool TryGetFromColumn(scoped ReadOnlySpan<byte> tag, scoped ReadOnlySpan<byte> entityKey, scoped out ReadOnlySpan<byte> value)
+    private bool TryGetFromColumn(scoped ReadOnlySpan<byte> tag, scoped ReadOnlySpan<byte> entityKey, scoped out ReadOnlySpan<byte> value)
     {
         Rsst.Rsst outer = new(_data.Span);
         if (!outer.TryGet(tag, out ReadOnlySpan<byte> columnData))
@@ -103,16 +102,11 @@ public sealed class PersistedSnapshot : RefCountingDisposable
             return false;
         }
 
-        // columnData is a slice of _data, safe to use in nested Rsst
-        fixed (byte* ptr = columnData)
-        {
-            ReadOnlySpan<byte> safeColumnData = MemoryMarshal.CreateReadOnlySpan(ref Unsafe.AsRef<byte>(ptr), columnData.Length);
-            Rsst.Rsst inner = new(safeColumnData);
-            return inner.TryGet(entityKey, out value);
-        }
+        Rsst.Rsst inner = new(columnData);
+        return inner.TryGet(entityKey, out value);
     }
 
-    private unsafe bool TryGetNestedValue(scoped ReadOnlySpan<byte> tag, scoped ReadOnlySpan<byte> addressKey, scoped ReadOnlySpan<byte> entityKey, out ReadOnlySpan<byte> value)
+    private bool TryGetNestedValue(scoped ReadOnlySpan<byte> tag, scoped ReadOnlySpan<byte> addressKey, scoped ReadOnlySpan<byte> entityKey, out ReadOnlySpan<byte> value)
     {
         Rsst.Rsst outer = new(_data.Span);
         if (!outer.TryGet(tag, out ReadOnlySpan<byte> columnData))
@@ -121,23 +115,15 @@ public sealed class PersistedSnapshot : RefCountingDisposable
             return false;
         }
 
-        fixed (byte* ptrColumn = columnData)
+        Rsst.Rsst addressLevel = new(columnData);
+        if (!addressLevel.TryGet(addressKey, out ReadOnlySpan<byte> innerData))
         {
-            ReadOnlySpan<byte> safeColumnData = MemoryMarshal.CreateReadOnlySpan(ref Unsafe.AsRef<byte>(ptrColumn), columnData.Length);
-            Rsst.Rsst addressLevel = new(safeColumnData);
-            if (!addressLevel.TryGet(addressKey, out ReadOnlySpan<byte> innerData))
-            {
-                value = default;
-                return false;
-            }
-
-            fixed (byte* ptrInner = innerData)
-            {
-                ReadOnlySpan<byte> safeInnerData = MemoryMarshal.CreateReadOnlySpan(ref Unsafe.AsRef<byte>(ptrInner), innerData.Length);
-                Rsst.Rsst inner = new(safeInnerData);
-                return inner.TryGet(entityKey, out value);
-            }
+            value = default;
+            return false;
         }
+
+        Rsst.Rsst inner = new(innerData);
+        return inner.TryGet(entityKey, out value);
     }
 
 
