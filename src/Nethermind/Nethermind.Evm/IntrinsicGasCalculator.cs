@@ -41,6 +41,8 @@ public static class IntrinsicGasCalculator
     public static IntrinsicGas<TGasPolicy> Calculate<TGasPolicy>(Transaction transaction, IReleaseSpec releaseSpec)
         where TGasPolicy : struct, IGasPolicy<TGasPolicy>
     {
+        // Note: Generic version doesn't use the cache because TGasPolicy.CalculateIntrinsicGas
+        // may have custom logic that differs from the standard calculation
         TGasPolicy standard = TGasPolicy.CalculateIntrinsicGas(transaction, releaseSpec);
         long floorCost = CalculateFloorCost(transaction, releaseSpec);
         TGasPolicy floorGas = TGasPolicy.FromLong(floorCost);
@@ -52,12 +54,24 @@ public static class IntrinsicGasCalculator
     /// </summary>
     public static EthereumIntrinsicGas Calculate(Transaction transaction, IReleaseSpec releaseSpec)
     {
+        // Check if we have cached values
+        if (transaction._cachedIntrinsicGasStandard.HasValue && transaction._cachedIntrinsicGasFloor.HasValue)
+        {
+            return new EthereumIntrinsicGas(transaction._cachedIntrinsicGasStandard.Value, transaction._cachedIntrinsicGasFloor.Value);
+        }
+
+        // Calculate and cache
         long intrinsicGas = GasCostOf.Transaction
                + DataCost(transaction, releaseSpec)
                + CreateCost(transaction, releaseSpec)
                + AccessListCost(transaction, releaseSpec)
                + AuthorizationListCost(transaction, releaseSpec);
         long floorGas = CalculateFloorCost(transaction, releaseSpec);
+
+        // Store in cache
+        transaction._cachedIntrinsicGasStandard = intrinsicGas;
+        transaction._cachedIntrinsicGasFloor = floorGas;
+
         return new EthereumIntrinsicGas(intrinsicGas, floorGas);
     }
 

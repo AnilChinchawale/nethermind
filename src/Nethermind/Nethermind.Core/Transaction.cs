@@ -16,6 +16,7 @@ using Nethermind.Int256;
 
 [assembly: InternalsVisibleTo("Nethermind.Consensus")]
 [assembly: InternalsVisibleTo("Nethermind.State")]
+[assembly: InternalsVisibleTo("Nethermind.Evm")]
 namespace Nethermind.Core
 {
     [DebuggerDisplay("{Hash}, Value: {Value}, To: {To}, Gas: {GasLimit}")]
@@ -205,6 +206,16 @@ namespace Nethermind.Core
         protected int? _size = null;
 
         /// <summary>
+        /// Cached intrinsic gas calculation (standard component)
+        /// </summary>
+        internal long? _cachedIntrinsicGasStandard = null;
+
+        /// <summary>
+        /// Cached intrinsic gas calculation (floor component)
+        /// </summary>
+        internal long? _cachedIntrinsicGasFloor = null;
+
+        /// <summary>
         /// Encoded transaction length
         /// </summary>
         public int GetLength(ITransactionSizeCalculator sizeCalculator, bool shouldCountBlobs)
@@ -311,6 +322,8 @@ namespace Nethermind.Core
                 obj.PoolIndex = default;
                 obj._size = default;
                 obj.AuthorizationList = default;
+                obj._cachedIntrinsicGasStandard = default;
+                obj._cachedIntrinsicGasFloor = default;
 
                 return true;
             }
@@ -343,6 +356,8 @@ namespace Nethermind.Core
             tx.PoolIndex = PoolIndex;
             tx._size = _size;
             tx.AuthorizationList = AuthorizationList;
+            tx._cachedIntrinsicGasStandard = _cachedIntrinsicGasStandard;
+            tx._cachedIntrinsicGasFloor = _cachedIntrinsicGasFloor;
         }
 
         public virtual ProofVersion? GetProofVersion() =>
