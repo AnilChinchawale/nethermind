@@ -41,12 +41,30 @@ public static class IntrinsicGasCalculator
     public static IntrinsicGas<TGasPolicy> Calculate<TGasPolicy>(Transaction transaction, IReleaseSpec releaseSpec)
         where TGasPolicy : struct, IGasPolicy<TGasPolicy>
     {
-        // Note: Generic version doesn't use the cache because TGasPolicy.CalculateIntrinsicGas
-        // may have custom logic that differs from the standard calculation
-        TGasPolicy standard = TGasPolicy.CalculateIntrinsicGas(transaction, releaseSpec);
+        // Check cache — if cached with same spec, reuse standard + floor values
+        if (transaction._cachedIntrinsicGasStandard.HasValue
+            && transaction._cachedIntrinsicGasFloor.HasValue
+            && ReferenceEquals(transaction._cachedIntrinsicGasSpec, releaseSpec)
+            && typeof(TGasPolicy) == typeof(EthereumGasPolicy))
+        {
+            TGasPolicy standard = TGasPolicy.FromLong(transaction._cachedIntrinsicGasStandard.Value);
+            TGasPolicy floorGas = TGasPolicy.FromLong(transaction._cachedIntrinsicGasFloor.Value);
+            return new IntrinsicGas<TGasPolicy>(standard, floorGas);
+        }
+
+        TGasPolicy calculatedStandard = TGasPolicy.CalculateIntrinsicGas(transaction, releaseSpec);
         long floorCost = CalculateFloorCost(transaction, releaseSpec);
-        TGasPolicy floorGas = TGasPolicy.FromLong(floorCost);
-        return new IntrinsicGas<TGasPolicy>(standard, floorGas);
+        TGasPolicy calculatedFloor = TGasPolicy.FromLong(floorCost);
+
+        // Populate cache for EthereumGasPolicy path
+        if (typeof(TGasPolicy) == typeof(EthereumGasPolicy))
+        {
+            transaction._cachedIntrinsicGasStandard = TGasPolicy.GetRemainingGas(calculatedStandard);
+            transaction._cachedIntrinsicGasFloor = floorCost;
+            transaction._cachedIntrinsicGasSpec = releaseSpec;
+        }
+
+        return new IntrinsicGas<TGasPolicy>(calculatedStandard, calculatedFloor);
     }
 
     /// <summary>
