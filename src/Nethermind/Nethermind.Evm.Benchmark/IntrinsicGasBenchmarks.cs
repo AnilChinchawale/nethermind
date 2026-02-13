@@ -29,7 +29,7 @@ namespace Nethermind.Evm.Benchmark
     {
         private IReleaseSpec _londonSpec = null!;
         private IReleaseSpec _pragueSpec = null!;
-        
+
         // Different transaction types for testing
         private Transaction _legacyTxSmall = null!;
         private Transaction _legacyTxLarge = null!;
@@ -44,7 +44,7 @@ namespace Nethermind.Evm.Benchmark
         public void GlobalSetup()
         {
             MainnetSpecProvider specProvider = MainnetSpecProvider.Instance;
-            
+
             // London = EIP-1559 support (block number 12965000)
             _londonSpec = specProvider.GetSpec((ForkActivation)MainnetSpecProvider.LondonBlockNumber);
             // Prague = Latest spec with all EIPs (use timestamp activation)
@@ -110,7 +110,7 @@ namespace Nethermind.Evm.Benchmark
                 .AddStorage(1)
                 .AddStorage(2)
                 .Build();
-            
+
             _eip2930TxSmall = Build.A.Transaction
                 .WithType(TxType.AccessList)
                 .WithData(smallData)
