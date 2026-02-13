@@ -54,8 +54,10 @@ public static class IntrinsicGasCalculator
     /// </summary>
     public static EthereumIntrinsicGas Calculate(Transaction transaction, IReleaseSpec releaseSpec)
     {
-        // Check if we have cached values
-        if (transaction._cachedIntrinsicGasStandard.HasValue && transaction._cachedIntrinsicGasFloor.HasValue)
+        // Check if we have cached values for the same spec
+        if (transaction._cachedIntrinsicGasStandard.HasValue 
+            && transaction._cachedIntrinsicGasFloor.HasValue
+            && ReferenceEquals(transaction._cachedIntrinsicGasSpec, releaseSpec))
         {
             return new EthereumIntrinsicGas(transaction._cachedIntrinsicGasStandard.Value, transaction._cachedIntrinsicGasFloor.Value);
         }
@@ -68,9 +70,10 @@ public static class IntrinsicGasCalculator
                + AuthorizationListCost(transaction, releaseSpec);
         long floorGas = CalculateFloorCost(transaction, releaseSpec);
 
-        // Store in cache
+        // Store in cache along with the spec
         transaction._cachedIntrinsicGasStandard = intrinsicGas;
         transaction._cachedIntrinsicGasFloor = floorGas;
+        transaction._cachedIntrinsicGasSpec = releaseSpec;
 
         return new EthereumIntrinsicGas(intrinsicGas, floorGas);
     }

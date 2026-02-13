@@ -12,6 +12,7 @@ using Microsoft.Extensions.ObjectPool;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Eip2930;
 using Nethermind.Core.Extensions;
+using Nethermind.Core.Specs;
 using Nethermind.Int256;
 
 [assembly: InternalsVisibleTo("Nethermind.Consensus")]
@@ -216,6 +217,11 @@ namespace Nethermind.Core
         internal long? _cachedIntrinsicGasFloor = null;
 
         /// <summary>
+        /// Release spec used for cached intrinsic gas calculation
+        /// </summary>
+        internal IReleaseSpec? _cachedIntrinsicGasSpec = null;
+
+        /// <summary>
         /// Encoded transaction length
         /// </summary>
         public int GetLength(ITransactionSizeCalculator sizeCalculator, bool shouldCountBlobs)
@@ -324,6 +330,7 @@ namespace Nethermind.Core
                 obj.AuthorizationList = default;
                 obj._cachedIntrinsicGasStandard = default;
                 obj._cachedIntrinsicGasFloor = default;
+                obj._cachedIntrinsicGasSpec = default;
 
                 return true;
             }
@@ -358,6 +365,7 @@ namespace Nethermind.Core
             tx.AuthorizationList = AuthorizationList;
             tx._cachedIntrinsicGasStandard = _cachedIntrinsicGasStandard;
             tx._cachedIntrinsicGasFloor = _cachedIntrinsicGasFloor;
+            tx._cachedIntrinsicGasSpec = _cachedIntrinsicGasSpec;
         }
 
         public virtual ProofVersion? GetProofVersion() =>

@@ -226,5 +226,111 @@ namespace Nethermind.Evm.Test
 
             Assert.That(() => IntrinsicGasCalculator.Calculate(tx, Cancun.Instance), Throws.InstanceOf<InvalidDataException>());
         }
+
+        [Test]
+        public void Cache_ReturnsSameValueOnSecondCallWithSameSpec()
+        {
+            // Arrange
+            Transaction tx = Build.A.Transaction.SignedAndResolved()
+                .WithData([1, 2, 3, 4, 5])
+                .TestObject;
+
+            // Act - Calculate intrinsic gas twice with the same spec
+            EthereumIntrinsicGas firstResult = IntrinsicGasCalculator.Calculate(tx, Istanbul.Instance);
+            EthereumIntrinsicGas secondResult = IntrinsicGasCalculator.Calculate(tx, Istanbul.Instance);
+
+            // Assert - Results should be identical
+            secondResult.Should().Be(firstResult);
+            secondResult.Standard.Should().Be(firstResult.Standard);
+            secondResult.FloorGas.Should().Be(firstResult.FloorGas);
+            
+            // Verify cache was actually used (both fields cached)
+            tx._cachedIntrinsicGasStandard.Should().NotBeNull();
+            tx._cachedIntrinsicGasFloor.Should().NotBeNull();
+            tx._cachedIntrinsicGasSpec.Should().BeSameAs(Istanbul.Instance);
+        }
+
+        [Test]
+        public void Cache_InvalidatesWhenSpecChanges()
+        {
+            // Arrange
+            Transaction tx = Build.A.Transaction.SignedAndResolved()
+                .WithData([1, 2, 3, 4, 5])
+                .TestObject;
+
+            // Act - Calculate with Istanbul (old gas costs)
+            EthereumIntrinsicGas istanbulResult = IntrinsicGasCalculator.Calculate(tx, Istanbul.Instance);
+            
+            // Calculate again with Homestead (different gas costs)
+            EthereumIntrinsicGas homesteadResult = IntrinsicGasCalculator.Calculate(tx, Homestead.Instance);
+
+            // Assert - Results should be different due to EIP-2028 (Istanbul repricing)
+            homesteadResult.Standard.Should().NotBe(istanbulResult.Standard, 
+                "Homestead and Istanbul have different gas costs for data");
+            
+            // Verify cache now holds Homestead spec
+            tx._cachedIntrinsicGasSpec.Should().BeSameAs(Homestead.Instance);
+        }
+
+        [Test]
+        public void Cache_WorksCorrectlyForPragueFloorCost()
+        {
+            // Arrange
+            Transaction tx = Build.A.Transaction.SignedAndResolved()
+                .WithData([1, 1, 1, 1, 1])
+                .TestObject;
+
+            // Act - Calculate twice with Prague (has floor cost)
+            EthereumIntrinsicGas firstResult = IntrinsicGasCalculator.Calculate(tx, Prague.Instance);
+            EthereumIntrinsicGas secondResult = IntrinsicGasCalculator.Calculate(tx, Prague.Instance);
+
+            // Assert
+            secondResult.Should().Be(firstResult);
+            firstResult.FloorGas.Should().BeGreaterThan(0, "Prague should have floor cost");
+            tx._cachedIntrinsicGasSpec.Should().BeSameAs(Prague.Instance);
+        }
+
+        [Test]
+        public void Cache_InvalidatesWhenSwitchingBetweenPragueAndCancun()
+        {
+            // Arrange - Prague has floor cost, Cancun doesn't
+            Transaction tx = Build.A.Transaction.SignedAndResolved()
+                .WithData([1, 1, 1, 1, 1])
+                .TestObject;
+
+            // Act
+            EthereumIntrinsicGas pragueResult = IntrinsicGasCalculator.Calculate(tx, Prague.Instance);
+            EthereumIntrinsicGas cancunResult = IntrinsicGasCalculator.Calculate(tx, Cancun.Instance);
+
+            // Assert - Floor costs should differ
+            pragueResult.FloorGas.Should().BeGreaterThan(0, "Prague has floor cost");
+            cancunResult.FloorGas.Should().Be(0, "Cancun doesn't have floor cost");
+            
+            // Verify cache correctly updated
+            tx._cachedIntrinsicGasSpec.Should().BeSameAs(Cancun.Instance);
+        }
+
+        [Test]
+        public void Cache_WorksForAccessListTransactions()
+        {
+            // Arrange
+            AccessList.Builder builder = new();
+            builder.AddAddress(Address.Zero);
+            builder.AddStorage((UInt256)1);
+            AccessList accessList = builder.Build();
+            
+            Transaction tx = Build.A.Transaction.SignedAndResolved()
+                .WithAccessList(accessList)
+                .TestObject;
+
+            // Act
+            EthereumIntrinsicGas firstResult = IntrinsicGasCalculator.Calculate(tx, Berlin.Instance);
+            EthereumIntrinsicGas secondResult = IntrinsicGasCalculator.Calculate(tx, Berlin.Instance);
+
+            // Assert
+            secondResult.Should().Be(firstResult);
+            firstResult.Standard.Should().BeGreaterThan(21000, "Access list should add cost");
+            tx._cachedIntrinsicGasSpec.Should().BeSameAs(Berlin.Instance);
+        }
     }
 }
