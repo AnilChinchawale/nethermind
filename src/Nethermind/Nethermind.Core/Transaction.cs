@@ -18,6 +18,7 @@ using Nethermind.Int256;
 [assembly: InternalsVisibleTo("Nethermind.Consensus")]
 [assembly: InternalsVisibleTo("Nethermind.State")]
 [assembly: InternalsVisibleTo("Nethermind.Evm")]
+[assembly: InternalsVisibleTo("Nethermind.Evm.Test")]
 namespace Nethermind.Core
 {
     [DebuggerDisplay("{Hash}, Value: {Value}, To: {To}, Gas: {GasLimit}")]

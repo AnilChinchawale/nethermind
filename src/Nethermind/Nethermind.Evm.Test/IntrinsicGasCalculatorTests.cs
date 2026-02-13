@@ -243,7 +243,7 @@ namespace Nethermind.Evm.Test
             secondResult.Should().Be(firstResult);
             secondResult.Standard.Should().Be(firstResult.Standard);
             secondResult.FloorGas.Should().Be(firstResult.FloorGas);
-            
+
             // Verify cache was actually used (both fields cached)
             tx._cachedIntrinsicGasStandard.Should().NotBeNull();
             tx._cachedIntrinsicGasFloor.Should().NotBeNull();
@@ -260,14 +260,14 @@ namespace Nethermind.Evm.Test
 
             // Act - Calculate with Istanbul (old gas costs)
             EthereumIntrinsicGas istanbulResult = IntrinsicGasCalculator.Calculate(tx, Istanbul.Instance);
-            
+
             // Calculate again with Homestead (different gas costs)
             EthereumIntrinsicGas homesteadResult = IntrinsicGasCalculator.Calculate(tx, Homestead.Instance);
 
             // Assert - Results should be different due to EIP-2028 (Istanbul repricing)
-            homesteadResult.Standard.Should().NotBe(istanbulResult.Standard, 
+            homesteadResult.Standard.Should().NotBe(istanbulResult.Standard,
                 "Homestead and Istanbul have different gas costs for data");
-            
+
             // Verify cache now holds Homestead spec
             tx._cachedIntrinsicGasSpec.Should().BeSameAs(Homestead.Instance);
         }
@@ -305,7 +305,7 @@ namespace Nethermind.Evm.Test
             // Assert - Floor costs should differ
             pragueResult.FloorGas.Should().BeGreaterThan(0, "Prague has floor cost");
             cancunResult.FloorGas.Should().Be(0, "Cancun doesn't have floor cost");
-            
+
             // Verify cache correctly updated
             tx._cachedIntrinsicGasSpec.Should().BeSameAs(Cancun.Instance);
         }
@@ -318,7 +318,7 @@ namespace Nethermind.Evm.Test
             builder.AddAddress(Address.Zero);
             builder.AddStorage((UInt256)1);
             AccessList accessList = builder.Build();
-            
+
             Transaction tx = Build.A.Transaction.SignedAndResolved()
                 .WithAccessList(accessList)
                 .TestObject;

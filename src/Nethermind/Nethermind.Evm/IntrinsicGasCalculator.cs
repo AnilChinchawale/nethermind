@@ -55,7 +55,7 @@ public static class IntrinsicGasCalculator
     public static EthereumIntrinsicGas Calculate(Transaction transaction, IReleaseSpec releaseSpec)
     {
         // Check if we have cached values for the same spec
-        if (transaction._cachedIntrinsicGasStandard.HasValue 
+        if (transaction._cachedIntrinsicGasStandard.HasValue
             && transaction._cachedIntrinsicGasFloor.HasValue
             && ReferenceEquals(transaction._cachedIntrinsicGasSpec, releaseSpec))
         {
