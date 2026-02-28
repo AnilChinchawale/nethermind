@@ -14,28 +14,28 @@ public static class XdcConstants
     /// BlockSigners contract address (0x89) - requires special transaction handling
     /// Transactions to this address bypass normal EVM execution
     /// </summary>
-    public static readonly Address BlockSignersAddress = 
+    public static readonly Address BlockSignersAddress =
         new("0x0000000000000000000000000000000000000089");
-    
+
     /// <summary>
     /// MasternodeVoting/Validator contract address (0x88)
     /// Transactions to this address may bypass normal balance validation
     /// in XDPoS consensus for masternode staking operations.
     /// </summary>
-    public static readonly Address ValidatorAddress = 
+    public static readonly Address ValidatorAddress =
         new("0x0000000000000000000000000000000000000088");
-    
+
     /// <summary>
     /// Randomize contract address (0x90)
     /// Used for XDPoS randomization - may bypass balance validation.
     /// </summary>
-    public static readonly Address RandomizeAddress = 
+    public static readonly Address RandomizeAddress =
         new("0x0000000000000000000000000000000000000090");
-    
+
     /// <summary>
     /// Foundation wallet address (with intentional typo matching geth-xdc)
     /// </summary>
-    public static readonly Address FoundationWalletAddress = 
+    public static readonly Address FoundationWalletAddress =
         new("0x92a289fe95a85c53b8d0d113cbaef0c1ec98ac65");
 
     /// <summary>
