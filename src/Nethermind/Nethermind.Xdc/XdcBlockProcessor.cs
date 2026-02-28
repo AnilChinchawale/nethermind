@@ -148,9 +148,10 @@ internal class XdcBlockProcessor : BlockProcessor
         // causes missing trie nodes or wrong balances. We accept the block with empty receipts
         // rather than halting the chain — mirrors erigon-xdc gasBailout=true behavior.
         // The XDPoS consensus already validated the block header; we trust it.
+        TxReceipt[] receipts;
         try
         {
-            return base.ProcessBlock(block, blockTracer, options, spec, token);
+            receipts = base.ProcessBlock(block, blockTracer, options, spec, token);
         }
         catch (Nethermind.Trie.MissingTrieNodeException ex)
         {
@@ -159,7 +160,7 @@ internal class XdcBlockProcessor : BlockProcessor
                              $"(node {ex.Hash}) — state divergence bypass, accepting with empty receipts");
             // Reset any partial state changes from this block — state returns to parent block root
             _stateProvider.Reset();
-            return Array.Empty<TxReceipt>();
+            receipts = Array.Empty<TxReceipt>();
         }
         catch (Exception ex) when (ex.Message.Contains("insufficient sender balance") ||
                                    ex.Message.Contains("InsufficientSenderBalance"))
@@ -168,8 +169,48 @@ internal class XdcBlockProcessor : BlockProcessor
                 _logger.Warn($"[XDC-GasBailout] Block {block.Number}: InsufficientSenderBalance " +
                              $"— state divergence bypass, accepting with empty receipts");
             _stateProvider.Reset();
-            return Array.Empty<TxReceipt>();
+            receipts = Array.Empty<TxReceipt>();
         }
+
+        // XDC GasBailout: pad receipts to match transaction count.
+        // PersistentReceiptStorage.Insert throws InvalidDataException if
+        // block.Transactions.Length != receipts.Length. This can happen when:
+        //   (a) a block-level exception is caught above (receipts = empty array), or
+        //   (b) XdcBlockTransactionsExecutor skips a tx without generating a receipt.
+        // Pad missing slots with synthetic failure receipts so storage accepts the block.
+        if (receipts.Length < block.Transactions.Length)
+        {
+            receipts = PadReceiptsForGasBailout(block, receipts);
+        }
+
+        return receipts;
+    }
+
+    /// <summary>
+    /// Pads a partial receipts array up to block.Transactions.Length.
+    /// Each skipped transaction gets a synthetic failure receipt so that
+    /// PersistentReceiptStorage.Insert does not throw on a count mismatch.
+    /// </summary>
+    private static TxReceipt[] PadReceiptsForGasBailout(Block block, TxReceipt[] existing)
+    {
+        int total = block.Transactions.Length;
+        var padded = new TxReceipt[total];
+        Array.Copy(existing, padded, existing.Length);
+        long gasUsedSoFar = existing.Length > 0 ? existing[^1].GasUsedTotal : 0;
+        for (int i = existing.Length; i < total; i++)
+        {
+            padded[i] = new TxReceipt
+            {
+                TxHash       = block.Transactions[i].Hash,
+                BlockNumber  = block.Number,
+                BlockHash    = block.Hash,
+                Index        = i,
+                Error        = "xdc-gasbailout-skip",
+                GasUsedTotal = gasUsedSoFar,   // cumulative gas unchanged (tx was not executed)
+                StatusCode   = Nethermind.Evm.StatusCode.Failure,
+            };
+        }
+        return padded;
     }
 
     protected override void ValidateProcessedBlock(Block suggestedBlock, ProcessingOptions options, Block block, TxReceipt[] receipts)
