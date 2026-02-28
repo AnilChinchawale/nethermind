@@ -156,7 +156,7 @@ internal class XdcBlockProcessor : BlockProcessor
         {
             if (_logger.IsWarn)
                 _logger.Warn($"[XDC-GasBailout] Block {block.Number}: MissingTrieNodeException " +
-                             $"(node {ex.NodeHash}) — state divergence bypass, accepting with empty receipts");
+                             $"(node {ex.Hash}) — state divergence bypass, accepting with empty receipts");
             // Reset any partial state changes from this block — state returns to parent block root
             _stateProvider.Reset();
             return Array.Empty<TxReceipt>();
