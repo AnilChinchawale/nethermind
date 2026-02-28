@@ -61,15 +61,22 @@ public class XdcModule : Module
             .As<IPenaltyHandler>()
             .SingleInstance();
 
+        // Register persistent RocksDB for XDPoS snapshot storage.
+        // Inline equivalent of ContainerBuilderExtensions.AddDatabase (Nethermind.Init not referenced here).
+        // Creates a keyed singleton IDb backed by RocksDB so snapshots survive restarts.
+        builder.AddKeyedSingleton<IDb>(XdcConstants.SnapshotDbName, (ctx) =>
+            ctx.Resolve<IDbFactory>().CreateDb(new DbSettings("XdcSnapshot", XdcConstants.SnapshotDbName)));
+
         // Register snapshot manager for XDPoS consensus state
         builder.Register(ctx =>
         {
             var blockTree = ctx.Resolve<IBlockTree>();
             var penaltyHandler = ctx.Resolve<IPenaltyHandler>();
-            
-            // Use in-memory DB for snapshots (TODO: register proper DB column in DbProvider)
-            var snapshotDb = new MemDb("xdc_snapshot");
-            
+
+            // Use persistent RocksDB for snapshot storage (resolves to the keyed IDb registered above).
+            // This replaces the previous MemDb which caused a full snapshot rebuild from genesis on every restart.
+            var snapshotDb = ctx.ResolveKeyed<IDb>(XdcConstants.SnapshotDbName);
+
             return new SnapshotManager(snapshotDb, blockTree, penaltyHandler);
         }).As<ISnapshotManager>()
           .SingleInstance();
@@ -107,7 +114,7 @@ public class XdcModule : Module
             var worldState = ctx.Resolve<IWorldState>();
             var ecdsa = ctx.Resolve<IEthereumEcdsa>();
             var chainSpec = ctx.Resolve<ChainSpec>();
-            
+
             // Get foundation wallet address from chainspec engine parameters
             Address? foundationWallet = null;
             if (chainSpec.EngineChainSpecParametersProvider is not null)
@@ -122,7 +129,7 @@ public class XdcModule : Module
                     // Fallback to default constant if not found in chainspec
                 }
             }
-            
+
             return new XdcRewardCalculator(logManager, blockTree, worldState, ecdsa, foundationWallet);
         }).As<IRewardCalculatorSource>()
           .InstancePerLifetimeScope();
