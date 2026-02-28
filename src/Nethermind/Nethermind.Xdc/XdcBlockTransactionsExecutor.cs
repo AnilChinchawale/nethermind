@@ -10,6 +10,7 @@
 // See also: erigon-xdc gasBailout commit 3381feaa, nethermind XdcStateRootCache commit 912e7f8cfe.
 
 using System;
+using Nethermind.Blockchain;
 using Nethermind.Blockchain.Tracing;
 using Nethermind.Consensus.Processing;
 using Nethermind.Core;
