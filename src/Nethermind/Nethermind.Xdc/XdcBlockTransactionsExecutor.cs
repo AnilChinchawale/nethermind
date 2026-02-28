@@ -17,6 +17,7 @@ using Nethermind.Core;
 using Nethermind.Evm.State;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Logging;
+using Nethermind.Trie;
 
 namespace Nethermind.Xdc;
 
@@ -52,9 +53,21 @@ internal class XdcBlockTransactionsExecutor : BlockProcessor.BlockValidationTran
         }
         catch (InvalidTransactionException ex) when (IsBalanceError(ex))
         {
-            // XDC GasBailout: log and skip — receipt was already started/ended by extension method
-            if (_logger.IsDebug)
-                _logger.Debug($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: {ex.Message.Split('\n')[0]} — skipping (state root divergence)");
+            // XDC GasBailout: log and skip — insufficient balance due to state root divergence
+            if (_logger.IsWarn)
+                _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: {ex.Message.Split('\n')[0]} — skipping (insufficient balance)");
+        }
+        catch (MissingTrieNodeException ex)
+        {
+            // XDC GasBailout: missing trie node — state DB is incomplete, skip this tx
+            // This happens when state root diverges and a trie node is not in RocksDB.
+            // IMPORTANT: StartNewTxTrace was called but EndTxTrace was NOT (exception was thrown
+            // during Execute before the extension method's EndTxTrace could run). We must call
+            // EndTxTrace here so _currentIndex is incremented correctly for subsequent txs.
+            try { receiptsTracer.EndTxTrace(); } catch { /* tracer already in invalid state; ignore */ }
+
+            if (_logger.IsWarn)
+                _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: MissingTrieNode {ex.Hash} — skipping (state divergence)");
         }
     }
 

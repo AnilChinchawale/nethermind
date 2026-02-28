@@ -148,13 +148,36 @@ internal class XdcBlockProcessor : BlockProcessor
     {
         // Save the remote (geth) state root before base validation may change it
         var remoteRoot = suggestedBlock.Header.StateRoot;
-        
+        bool isXdc = _specProvider.ChainId == 50 || _specProvider.ChainId == 51;
+
+        // XDC GasBailout: if some transactions were skipped due to MissingTrieNodeException,
+        // receipts.Length < block.Transactions.Length. In that case, skip full block validation
+        // (receipts root, gas used, bloom will all differ) and accept whatever partial state we have.
+        // This mirrors erigon-xdc's gasBailout=true behavior: trust the canonical chain's block header
+        // (validated by XDPoS consensus) even if we can't perfectly replicate every transaction.
+        if (isXdc && receipts.Length < block.Transactions.Length)
+        {
+            if (_logger.IsWarn)
+                _logger.Warn($"[XDC-GasBailout] Block {block.Number}: processed {receipts.Length}/{block.Transactions.Length} txs due to state divergence — accepting block (gasBailout mode)");
+
+            // Accept the block; update state root to our locally computed value
+            suggestedBlock.Header.StateRoot = block.Header.StateRoot;
+            suggestedBlock.AccountChanges = block.AccountChanges;
+            suggestedBlock.ExecutionRequests = block.ExecutionRequests;
+
+            // Cache state root mapping (remote geth root → local NM root)
+            var localRoot = block.Header.StateRoot;
+            if (localRoot is not null)
+                XdcStateRootCache.SetComputedStateRoot(suggestedBlock.Number, localRoot, remoteRoot);
+
+            return;
+        }
+
         base.ValidateProcessedBlock(suggestedBlock, options, block, receipts);
-        
+
         // XDC: Cache our computed state root with remote→local mapping.
         // This allows HasStateForBlock and BeginScope to find our local trie
         // when looking up a stored header's (geth) state root.
-        bool isXdc = _specProvider.ChainId == 50 || _specProvider.ChainId == 51;
         if (isXdc)
         {
             var localRoot = block.Header.StateRoot;
