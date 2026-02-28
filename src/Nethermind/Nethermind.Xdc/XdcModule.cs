@@ -3,6 +3,7 @@
 
 using Autofac;
 using Nethermind.Blockchain;
+using Nethermind.Core;
 using Nethermind.Consensus;
 using Nethermind.Consensus.Processing;
 using Nethermind.Crypto;
