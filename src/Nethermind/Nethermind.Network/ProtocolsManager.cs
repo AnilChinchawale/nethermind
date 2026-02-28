@@ -44,12 +44,15 @@ namespace Nethermind.Network
     {
         public static readonly IEnumerable<Capability> DefaultCapabilities = new Capability[]
         {
+            new(Protocol.Eth, 62),
+            new(Protocol.Eth, 63),
             new(Protocol.Eth, 66),
             new(Protocol.Eth, 67),
             new(Protocol.Eth, 68),
-            new(Protocol.Eth, 100),
             new(Protocol.NodeData, 1)
         };
+        // NOTE: eth/100 (XDPoS) removed — no handler implemented; was causing NotSupportedException
+        // on every XDC peer connection. eth/62 and eth/63 added so XDC peers can negotiate eth/63.
 
         private readonly ConcurrentDictionary<Guid, SyncPeerProtocolHandlerBase> _syncPeers = new();
 
