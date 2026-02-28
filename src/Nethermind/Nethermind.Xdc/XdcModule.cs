@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Anil Chinchawale
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using Nethermind.Blockchain.Headers;
 using Autofac;
 using Nethermind.Blockchain;
 using Nethermind.Core;
@@ -41,6 +42,15 @@ public class XdcModule : Module
         // instead of XDC 18-field encoding (Validators, Validator, Penalties)
         builder.RegisterType<XdcHeaderDecoder>()
             .As<IHeaderDecoder>()
+            .SingleInstance();
+
+        // CRITICAL: Register XdcHeaderStore as IHeaderStore
+        // Standard HeaderStore has optional IHeaderDecoder with default null, which falls back
+        // to standard 15-field decoder. We must explicitly register XdcHeaderStore which passes
+        // XdcHeaderDecoder to the base constructor. This ensures all block headers in DB and P2P
+        // are encoded/decoded with XDC's 18-field format.
+        builder.RegisterType<XdcHeaderStore>()
+            .As<Nethermind.Blockchain.Headers.IHeaderStore>()
             .SingleInstance();
 
         // Register penalty handler for masternode penalties
