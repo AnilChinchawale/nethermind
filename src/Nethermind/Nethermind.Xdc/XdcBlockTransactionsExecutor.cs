@@ -53,7 +53,13 @@ internal class XdcBlockTransactionsExecutor : BlockProcessor.BlockValidationTran
         }
         catch (InvalidTransactionException ex) when (IsBalanceError(ex))
         {
-            // XDC GasBailout: log and skip — insufficient balance due to state root divergence
+            // XDC GasBailout: log and skip — insufficient balance due to state root divergence.
+            // IMPORTANT: StartNewTxTrace was called before Execute, but EndTxTrace was NOT called
+            // (exception thrown during BuyGas). Call EndTxTrace() here so a failed receipt is
+            // added — without it the receipt count won't match the transaction count and
+            // BlockValidator throws ReceiptCountMismatch (InvalidDataException at block 528681).
+            try { receiptsTracer.EndTxTrace(); } catch { /* tracer may be in invalid state; ignore */ }
+
             if (_logger.IsWarn)
                 _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: {ex.Message.Split('\n')[0]} — skipping (insufficient balance)");
         }
