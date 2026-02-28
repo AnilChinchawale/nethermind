@@ -67,4 +67,10 @@ public static class XdcConstants
     /// Nonce value indicating a "drop vote" (validator wants to leave)
     /// </summary>
     public const ulong NonceDropVoteValue = 18446744073709551615; // max ulong
+
+    /// <summary>
+    /// RocksDB key name for XDPoS snapshot persistence.
+    /// Registered as a keyed IDb via ContainerBuilderExtensions.AddDatabase.
+    /// </summary>
+    public const string SnapshotDbName = "xdcSnapshot";
 }
