@@ -59,11 +59,11 @@ public class XdcModule : Module
         {
             var blockTree = ctx.Resolve<IBlockTree>();
             var penaltyHandler = ctx.Resolve<IPenaltyHandler>();
-            
+
             // Use persistent RocksDB for snapshot storage (resolves to the keyed IDb registered above).
             // This replaces the previous MemDb which caused a full snapshot rebuild from genesis on every restart.
             var snapshotDb = ctx.ResolveKeyed<IDb>(XdcConstants.SnapshotDbName);
-            
+
             return new SnapshotManager(snapshotDb, blockTree, penaltyHandler);
         }).As<ISnapshotManager>()
           .SingleInstance();
@@ -101,7 +101,7 @@ public class XdcModule : Module
             var worldState = ctx.Resolve<IWorldState>();
             var ecdsa = ctx.Resolve<IEthereumEcdsa>();
             var chainSpec = ctx.Resolve<ChainSpec>();
-            
+
             // Get foundation wallet address from chainspec engine parameters
             Address? foundationWallet = null;
             if (chainSpec.EngineChainSpecParametersProvider is not null)
@@ -116,7 +116,7 @@ public class XdcModule : Module
                     // Fallback to default constant if not found in chainspec
                 }
             }
-            
+
             return new XdcRewardCalculator(logManager, blockTree, worldState, ecdsa, foundationWallet);
         }).As<IRewardCalculatorSource>()
           .InstancePerLifetimeScope();
