@@ -46,14 +46,15 @@ public class XdcModule : Module
 
         // CRITICAL: Register XdcHeaderStore as IHeaderStore
         // Standard HeaderStore has optional IHeaderDecoder with default null, which falls back
-        // to standard 15-field decoder. We must explicitly register XdcHeaderStore which passes
-        // XdcHeaderDecoder to the base constructor. This ensures all block headers in DB and P2P
-        // are encoded/decoded with XDC's 18-field format.
-        // Use WithAttributeFiltering() to enable KeyFilter resolution for IDb parameters.
-        builder.RegisterType<XdcHeaderStore>()
-            .As<Nethermind.Blockchain.Headers.IHeaderStore>()
-            .WithAttributeFiltering()
-            .SingleInstance();
+        // to standard 15-field decoder. We resolve the keyed IDb services manually and construct
+        // XdcHeaderStore which passes XdcHeaderDecoder to HeaderStore base constructor.
+        builder.Register(ctx =>
+        {
+            var headerDb = ctx.ResolveKeyed<IDb>(DbNames.Headers);
+            var blockNumberDb = ctx.ResolveKeyed<IDb>(DbNames.BlockNumbers);
+            return new XdcHeaderStore(headerDb, blockNumberDb);
+        }).As<Nethermind.Blockchain.Headers.IHeaderStore>()
+          .SingleInstance();
 
         // Register penalty handler for masternode penalties
         builder.RegisterType<PenaltyHandler>()
