@@ -4,6 +4,7 @@
 using Autofac;
 using Nethermind.Blockchain;
 using Nethermind.Core;
+using Nethermind.Core.Container;
 using Nethermind.Consensus;
 using Nethermind.Consensus.Processing;
 using Nethermind.Crypto;
@@ -65,12 +66,11 @@ public class XdcModule : Module
             .As<IGenesisBuilder>()
             .InstancePerLifetimeScope();
 
-        // Register XDC-specific block transactions executor with gasBailout support.
-        // This overrides the default BlockValidationTransactionsExecutor to skip
-        // "insufficient sender balance" errors caused by accumulated state root divergence.
-        builder.RegisterType<XdcBlockTransactionsExecutor>()
-            .As<IBlockProcessor.IBlockTransactionsExecutor>()
-            .InstancePerLifetimeScope();
+        // Register XDC block validation module so XdcBlockTransactionsExecutor is used
+        // in the MainProcessingContext's inner scope (where StandardBlockValidationModule also registers).
+        // This follows the Taiko plugin pattern: AddSingleton<IBlockValidationModule> so the module
+        // is applied AFTER StandardBlockValidationModule and thus overrides it.
+        builder.AddSingleton<IBlockValidationModule, XdcBlockValidationModule>();
 
         // Register XDC block processor that preserves XdcBlockHeader during processing
         // IHeaderStore is auto-resolved by Autofac from BlockTreeModule registration
@@ -149,5 +149,22 @@ public class XdcModule : Module
                 consensusProcessor);
         }).As<ICustomEthProtocolFactory>()
           .SingleInstance();
+    }
+}
+
+/// <summary>
+/// IBlockValidationModule for XDC that registers XdcBlockTransactionsExecutor
+/// in the MainProcessingContext's inner lifetime scope, overriding the standard
+/// BlockValidationTransactionsExecutor. Follows the same pattern as TaikoBlockValidationModule.
+/// </summary>
+public class XdcBlockValidationModule : Module, IBlockValidationModule
+{
+    protected override void Load(ContainerBuilder builder)
+    {
+        // Register XDC-specific block transactions executor with gasBailout support.
+        // This overrides the standard BlockValidationTransactionsExecutor to catch
+        // MissingTrieNodeException and InvalidTransactionException (insufficient balance)
+        // caused by accumulated state root divergence in XDC mainnet/apothem.
+        builder.AddScoped<IBlockProcessor.IBlockTransactionsExecutor, XdcBlockTransactionsExecutor>();
     }
 }
