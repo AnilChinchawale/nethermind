@@ -46,13 +46,13 @@ public class XdcTransactionProcessor : TransactionProcessorBase
     private const long TIPSigningBlock = 3_000_000;
 
     protected override TransactionResult Execute(
-        Transaction tx, 
-        ITxTracer tracer, 
+        Transaction tx,
+        ITxTracer tracer,
         ExecutionOptions opts)
     {
         // Get current block header to check block number
         BlockHeader header = VirtualMachine.BlockExecutionContext.Header;
-        
+
         // Only apply special BlockSigners handling after TIPSigning fork (block 3,000,000)
         // Before this fork, BlockSigners transactions are processed normally through EVM
         if (header.Number >= TIPSigningBlock && IsBlockSignersTransaction(tx))
@@ -70,10 +70,10 @@ public class XdcTransactionProcessor : TransactionProcessorBase
     /// </summary>
     private bool IsBlockSignersTransaction(Transaction transaction)
     {
-        return transaction.To is not null 
+        return transaction.To is not null
             && transaction.To == XdcConstants.BlockSignersAddress;
     }
-    
+
     /// <summary>
     /// Checks if a transaction is destined for an XDPoS system contract.
     /// System contracts include:
@@ -87,12 +87,12 @@ public class XdcTransactionProcessor : TransactionProcessorBase
     private bool IsXdcSystemContractTransaction(Transaction transaction)
     {
         if (transaction.To is null) return false;
-        
+
         return transaction.To == XdcConstants.ValidatorAddress ||
                transaction.To == XdcConstants.BlockSignersAddress ||
                transaction.To == XdcConstants.RandomizeAddress;
     }
-    
+
     /// <summary>
     /// Override BuyGas to skip balance validation for XDPoS system contract transactions.
     /// 
@@ -106,13 +106,13 @@ public class XdcTransactionProcessor : TransactionProcessorBase
     /// Issue: https://github.com/AnilChinchawale/nethermind/issues/38
     /// </summary>
     protected override TransactionResult BuyGas(
-        Transaction tx, 
-        IReleaseSpec spec, 
-        ITxTracer tracer, 
+        Transaction tx,
+        IReleaseSpec spec,
+        ITxTracer tracer,
         ExecutionOptions opts,
-        in UInt256 effectiveGasPrice, 
-        out UInt256 premiumPerGas, 
-        out UInt256 senderReservedGasPayment, 
+        in UInt256 effectiveGasPrice,
+        out UInt256 premiumPerGas,
+        out UInt256 senderReservedGasPayment,
         out UInt256 blobBaseFee)
     {
         // For XDPoS system contract transactions, skip balance validation
@@ -122,12 +122,12 @@ public class XdcTransactionProcessor : TransactionProcessorBase
         {
             if (Logger.IsDebug)
                 Logger.Debug($"XDC system contract tx to {tx.To}, skipping balance validation");
-            
+
             // Force skip validation for XDPoS system contracts
             opts |= ExecutionOptions.SkipValidation;
         }
-        
-        return base.BuyGas(tx, spec, tracer, opts, in effectiveGasPrice, 
+
+        return base.BuyGas(tx, spec, tracer, opts, in effectiveGasPrice,
             out premiumPerGas, out senderReservedGasPayment, out blobBaseFee);
     }
 
@@ -150,7 +150,7 @@ public class XdcTransactionProcessor : TransactionProcessorBase
     /// https://github.com/XinFinOrg/XDPoSChain/blob/master/core/state_processor.go#L312
     /// </summary>
     private TransactionResult ApplySignTransaction(
-        Transaction tx, 
+        Transaction tx,
         ITxTracer tracer,
         ExecutionOptions opts)
     {
@@ -159,13 +159,13 @@ public class XdcTransactionProcessor : TransactionProcessorBase
             // Get current block header for context
             BlockHeader header = VirtualMachine.BlockExecutionContext.Header;
             IReleaseSpec spec = GetSpec(header);
-            
+
             // Get sender address (must be already set)
             Address sender = tx.SenderAddress!;
-            
+
             // Create account if it doesn't exist (geth-xdc behavior)
             WorldState.CreateAccountIfNotExists(sender, UInt256.Zero, UInt256.Zero);
-            
+
             // Deduct gas cost from sender (pre-payment) - IMPORTANT for state root
             UInt256 gasCost = (UInt256)tx.GasLimit * tx.GasPrice;
             UInt256 senderBalance = WorldState.GetBalance(sender);
@@ -181,7 +181,7 @@ public class XdcTransactionProcessor : TransactionProcessorBase
             {
                 if (Logger.IsDebug)
                     Logger.Debug($"BlockSigners tx invalid nonce: expected {nonce}, got {tx.Nonce}");
-                
+
                 return TransactionResult.WrongTransactionNonce;
             }
             WorldState.IncrementNonce(sender);
@@ -221,7 +221,7 @@ public class XdcTransactionProcessor : TransactionProcessorBase
         {
             if (Logger.IsError)
                 Logger.Error($"Failed to apply BlockSigners transaction: {ex.Message}");
-            
+
             return TransactionResult.MalformedTransaction;
         }
     }

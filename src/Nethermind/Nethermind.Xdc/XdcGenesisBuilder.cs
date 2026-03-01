@@ -32,7 +32,7 @@ public class XdcGenesisBuilder(
     {
         Block genesis = chainSpec.Genesis;
         genesis = genesis.WithReplacedHeader(XdcBlockHeader.FromBlockHeader(genesis.Header));
-        
+
         // Set XDC header fields for genesis - must match geth-xdc genesis encoding
         // geth genesis has empty Validators/Validator/Penalties (default zero values in Go struct)
         if (genesis.Header is XdcBlockHeader xdcHeader)
@@ -43,7 +43,7 @@ public class XdcGenesisBuilder(
             xdcHeader.Validator ??= Array.Empty<byte>();
             xdcHeader.Penalties ??= Array.Empty<byte>();
         }
-        
+
         Preallocate(genesis);
 
         foreach (IGenesisPostProcessor postProcessor in postProcessors)

@@ -38,25 +38,25 @@ public class XdcHeaderDecoderTests
         UInt256 baseFee = default)
     {
         var header = new XdcBlockHeader(
-            parentHash:  Keccak.Compute("parent"u8.ToArray()),
-            unclesHash:  Keccak.OfAnEmptySequenceRlp,
+            parentHash: Keccak.Compute("parent"u8.ToArray()),
+            unclesHash: Keccak.OfAnEmptySequenceRlp,
             beneficiary: Address.Zero,
-            difficulty:  UInt256.One,
-            number:      number,
-            gasLimit:    XdcConstants.TargetGasLimit,
-            timestamp:   (ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-            extraData:   new byte[] { XdcConstants.ConsensusVersion, 0x00 })
+            difficulty: UInt256.One,
+            number: number,
+            gasLimit: XdcConstants.TargetGasLimit,
+            timestamp: (ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            extraData: new byte[] { XdcConstants.ConsensusVersion, 0x00 })
         {
-            StateRoot     = Keccak.EmptyTreeHash,
-            TxRoot        = Keccak.EmptyTreeHash,
-            ReceiptsRoot  = Keccak.EmptyTreeHash,
-            Bloom         = Bloom.Empty,
-            GasUsed       = 0,
-            MixHash       = Keccak.Zero,
-            Nonce         = 0,
-            Validators    = validators ?? Array.Empty<byte>(),
-            Validator     = validator  ?? Array.Empty<byte>(),
-            Penalties     = penalties  ?? Array.Empty<byte>(),
+            StateRoot = Keccak.EmptyTreeHash,
+            TxRoot = Keccak.EmptyTreeHash,
+            ReceiptsRoot = Keccak.EmptyTreeHash,
+            Bloom = Bloom.Empty,
+            GasUsed = 0,
+            MixHash = Keccak.Zero,
+            Nonce = 0,
+            Validators = validators ?? Array.Empty<byte>(),
+            Validator = validator ?? Array.Empty<byte>(),
+            Penalties = penalties ?? Array.Empty<byte>(),
             BaseFeePerGas = baseFee,
         };
         return header;
@@ -77,22 +77,22 @@ public class XdcHeaderDecoderTests
     public void Encode_Decode_RoundTrip_BasicFields()
     {
         XdcBlockHeader original = BuildSampleHeader(number: 1800);
-        XdcBlockHeader decoded  = RoundTrip(original);
+        XdcBlockHeader decoded = RoundTrip(original);
 
         Assert.Multiple(() =>
         {
-            Assert.That(decoded.Number,       Is.EqualTo(original.Number));
-            Assert.That(decoded.GasLimit,     Is.EqualTo(original.GasLimit));
-            Assert.That(decoded.Difficulty,   Is.EqualTo(original.Difficulty));
-            Assert.That(decoded.Timestamp,    Is.EqualTo(original.Timestamp));
-            Assert.That(decoded.Beneficiary,  Is.EqualTo(original.Beneficiary));
-            Assert.That(decoded.ParentHash,   Is.EqualTo(original.ParentHash));
-            Assert.That(decoded.UnclesHash,   Is.EqualTo(original.UnclesHash));
-            Assert.That(decoded.StateRoot,    Is.EqualTo(original.StateRoot));
-            Assert.That(decoded.TxRoot,       Is.EqualTo(original.TxRoot));
+            Assert.That(decoded.Number, Is.EqualTo(original.Number));
+            Assert.That(decoded.GasLimit, Is.EqualTo(original.GasLimit));
+            Assert.That(decoded.Difficulty, Is.EqualTo(original.Difficulty));
+            Assert.That(decoded.Timestamp, Is.EqualTo(original.Timestamp));
+            Assert.That(decoded.Beneficiary, Is.EqualTo(original.Beneficiary));
+            Assert.That(decoded.ParentHash, Is.EqualTo(original.ParentHash));
+            Assert.That(decoded.UnclesHash, Is.EqualTo(original.UnclesHash));
+            Assert.That(decoded.StateRoot, Is.EqualTo(original.StateRoot));
+            Assert.That(decoded.TxRoot, Is.EqualTo(original.TxRoot));
             Assert.That(decoded.ReceiptsRoot, Is.EqualTo(original.ReceiptsRoot));
-            Assert.That(decoded.MixHash,      Is.EqualTo(original.MixHash));
-            Assert.That(decoded.Nonce,        Is.EqualTo(original.Nonce));
+            Assert.That(decoded.MixHash, Is.EqualTo(original.MixHash));
+            Assert.That(decoded.Nonce, Is.EqualTo(original.Nonce));
         });
     }
 
@@ -100,7 +100,7 @@ public class XdcHeaderDecoderTests
     public void Encode_Decode_RoundTrip_ExtraData_IsPreserved()
     {
         XdcBlockHeader original = BuildSampleHeader();
-        XdcBlockHeader decoded  = RoundTrip(original);
+        XdcBlockHeader decoded = RoundTrip(original);
 
         Assert.That(decoded.ExtraData, Is.EqualTo(original.ExtraData));
     }
@@ -116,7 +116,7 @@ public class XdcHeaderDecoderTests
             .CopyTo(twoAddresses.AsSpan(20, 20));
 
         XdcBlockHeader original = BuildSampleHeader(validators: twoAddresses);
-        XdcBlockHeader decoded  = RoundTrip(original);
+        XdcBlockHeader decoded = RoundTrip(original);
 
         Assert.That(decoded.Validators, Is.EqualTo(original.Validators));
     }
@@ -129,7 +129,7 @@ public class XdcHeaderDecoderTests
             .CopyTo(penaltyAddr.AsSpan(0, 20));
 
         XdcBlockHeader original = BuildSampleHeader(penalties: penaltyAddr);
-        XdcBlockHeader decoded  = RoundTrip(original);
+        XdcBlockHeader decoded = RoundTrip(original);
 
         Assert.That(decoded.Penalties, Is.EqualTo(original.Penalties));
     }
@@ -139,7 +139,7 @@ public class XdcHeaderDecoderTests
     {
         UInt256 baseFee = (UInt256)1_000_000_000; // 1 Gwei
         XdcBlockHeader original = BuildSampleHeader(baseFee: baseFee);
-        XdcBlockHeader decoded  = RoundTrip(original);
+        XdcBlockHeader decoded = RoundTrip(original);
 
         Assert.That(decoded.BaseFeePerGas, Is.EqualTo(original.BaseFeePerGas));
     }
@@ -154,8 +154,8 @@ public class XdcHeaderDecoderTests
 
         // ForSealing omits the Validator (seal) field so the pre-seal hash is reproducible.
         Rlp sealingRlp = _decoder.Encode(original, RlpBehaviors.ForSealing);
-        var rlpStream  = new RlpStream(sealingRlp.Bytes);
-        var decoded    = (XdcBlockHeader)_decoder.Decode(rlpStream, RlpBehaviors.ForSealing)!;
+        var rlpStream = new RlpStream(sealingRlp.Bytes);
+        var decoded = (XdcBlockHeader)_decoder.Decode(rlpStream, RlpBehaviors.ForSealing)!;
 
         // When decoded with ForSealing, Validator is not present → null or empty.
         bool validatorAbsent =
@@ -171,7 +171,7 @@ public class XdcHeaderDecoderTests
     {
         XdcBlockHeader header = BuildSampleHeader();
         int declared = _decoder.GetLength(header, RlpBehaviors.None);
-        Rlp encoded  = _decoder.Encode(header, RlpBehaviors.None);
+        Rlp encoded = _decoder.Encode(header, RlpBehaviors.None);
 
         Assert.That(encoded.Bytes.Length, Is.EqualTo(declared),
             "GetLength must return the exact byte count produced by Encode.");

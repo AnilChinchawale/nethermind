@@ -48,8 +48,8 @@ public class XdcConstantsTests
     public void ThreeSpecialAddresses_AreDistinct()
     {
         // Sanity: 0x88, 0x89, 0x90 must not collide.
-        Assert.That(XdcConstants.ValidatorAddress,    Is.Not.EqualTo(XdcConstants.BlockSignersAddress));
-        Assert.That(XdcConstants.ValidatorAddress,    Is.Not.EqualTo(XdcConstants.RandomizeAddress));
+        Assert.That(XdcConstants.ValidatorAddress, Is.Not.EqualTo(XdcConstants.BlockSignersAddress));
+        Assert.That(XdcConstants.ValidatorAddress, Is.Not.EqualTo(XdcConstants.RandomizeAddress));
         Assert.That(XdcConstants.BlockSignersAddress, Is.Not.EqualTo(XdcConstants.RandomizeAddress));
     }
 

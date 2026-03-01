@@ -26,7 +26,7 @@ namespace Nethermind.Xdc.P2P.Eth100.Messages
         {
         }
 
-        public override string ToString() => 
+        public override string ToString() =>
             $"{nameof(SyncInfoP2PMessage)}(QC:{SyncInfo?.HighestQuorumCert?.ProposedBlockInfo}, TC:{SyncInfo?.HighestTimeoutCert?.Round})";
     }
 }

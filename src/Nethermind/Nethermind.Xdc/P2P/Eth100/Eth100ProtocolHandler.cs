@@ -34,7 +34,7 @@ namespace Nethermind.Xdc.P2P.Eth100
         private Timer? _keepaliveTimer;
         private readonly TimeSpan _keepaliveInterval = TimeSpan.FromSeconds(20);
         private DateTime _lastActivity = DateTime.MinValue;
-        
+
         /// <summary>
         /// Event fired when XDC peer disconnects - can be used for immediate reconnection attempts
         /// </summary>
@@ -51,7 +51,7 @@ namespace Nethermind.Xdc.P2P.Eth100
             ILogManager logManager,
             IXdcConsensusMessageProcessor? consensusProcessor = null,
             ITxGossipPolicy? transactionsGossipPolicy = null)
-            : base(session, serializer, nodeStatsManager, syncServer, backgroundTaskScheduler, 
+            : base(session, serializer, nodeStatsManager, syncServer, backgroundTaskScheduler,
                    txPool, gossipPolicy, logManager, transactionsGossipPolicy)
         {
             _consensusProcessor = consensusProcessor;
@@ -96,7 +96,7 @@ namespace Nethermind.Xdc.P2P.Eth100
             // We send a lightweight GetBlockHeaders request every 20s to keep the connection alive
             _lastActivity = DateTime.UtcNow;
             _keepaliveTimer = new Timer(OnKeepaliveTimer, null, _keepaliveInterval, _keepaliveInterval);
-            
+
             if (Logger.IsDebug)
                 Logger.Debug($"XDC eth/100: Keepalive timer started ({_keepaliveInterval.TotalSeconds}s interval)");
 
@@ -111,7 +111,7 @@ namespace Nethermind.Xdc.P2P.Eth100
             {
                 Session.Disconnected -= OnSessionDisconnected;
             }
-            
+
             _keepaliveTimer?.Dispose();
             _keepaliveTimer = null;
             base.Dispose();
@@ -285,7 +285,7 @@ namespace Nethermind.Xdc.P2P.Eth100
         {
             VoteP2PMessage message = new(vote);
             Send(message);
-            
+
             if (Logger.IsDebug)
                 Logger.Debug($"Broadcast Vote: {vote}");
         }
@@ -297,7 +297,7 @@ namespace Nethermind.Xdc.P2P.Eth100
         {
             TimeoutP2PMessage message = new(timeout);
             Send(message);
-            
+
             if (Logger.IsDebug)
                 Logger.Debug($"Broadcast Timeout: {timeout}");
         }
@@ -309,7 +309,7 @@ namespace Nethermind.Xdc.P2P.Eth100
         {
             SyncInfoP2PMessage message = new(syncInfo);
             Send(message);
-            
+
             if (Logger.IsTrace)
                 Logger.Trace($"Sent SyncInfo to {Node:c}");
         }
@@ -321,7 +321,7 @@ namespace Nethermind.Xdc.P2P.Eth100
         {
             QuorumCertificateP2PMessage message = new(qc);
             Send(message);
-            
+
             if (Logger.IsDebug)
                 Logger.Debug($"Broadcast QC: {qc?.ProposedBlockInfo}");
         }

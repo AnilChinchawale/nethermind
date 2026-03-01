@@ -28,7 +28,7 @@ namespace Nethermind.Xdc.P2P.Eth100.Messages
         {
         }
 
-        public override string ToString() => 
+        public override string ToString() =>
             $"{nameof(QuorumCertificateP2PMessage)}({QuorumCertificate?.ProposedBlockInfo})";
     }
 }

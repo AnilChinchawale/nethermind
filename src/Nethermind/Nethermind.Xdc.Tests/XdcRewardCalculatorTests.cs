@@ -166,7 +166,7 @@ public class XdcRewardCalculatorTests
     {
         UInt256 calcReward = UInt256.Parse(rewardStr);
 
-        UInt256 ownerReward      = calcReward * (UInt256)RewardMasterPercent     / 100;
+        UInt256 ownerReward = calcReward * (UInt256)RewardMasterPercent / 100;
         UInt256 foundationReward = calcReward * (UInt256)RewardFoundationPercent / 100;
 
         // Owner gets exactly 90 %.

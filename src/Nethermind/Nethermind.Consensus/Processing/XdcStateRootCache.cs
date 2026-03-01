@@ -157,7 +157,7 @@ public static class XdcStateRootCache
         try
         {
             var json = File.ReadAllText(_persistPath);
-            
+
             // Try new format first
             try
             {
@@ -176,7 +176,7 @@ public static class XdcStateRootCache
                 }
             }
             catch { /* Fall through to old format */ }
-            
+
             // Fallback to old single-entry format for backwards compatibility
             var oldData = JsonSerializer.Deserialize<CacheEntry>(json);
             if (oldData?.LocalRoot is not null)
@@ -207,7 +207,7 @@ public static class XdcStateRootCache
         public string? LocalRoot { get; set; }
         public string? RemoteRoot { get; set; }
     }
-    
+
     private class FullCacheEntry
     {
         public long LastBlockNumber { get; set; }

@@ -51,7 +51,7 @@ internal class XdcBlockTree : BlockTree
         {
             return AddBlockResult.InvalidBlock;
         }
-        
+
         // During catch-up sync (far behind tip), skip XDC finalization checks
         // Finalization validation is only relevant when near the chain tip
         const long CatchUpSyncThreshold = 100;
@@ -60,7 +60,7 @@ internal class XdcBlockTree : BlockTree
             // Let base BlockTree handle validation during batch sync
             return base.Suggest(block, header, options);
         }
-        
+
         if (header.Number - finalizedBlockInfo.BlockNumber > MaxSearchDepth)
         {
             //Theoretically very deep reorgs could happen, if the chain doesnt finalize for a long time
