@@ -138,6 +138,27 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
         return blockHeader;
     }
 
+    /// <summary>
+    /// Wraps a plain <see cref="BlockHeader"/> as an <see cref="XdcBlockHeader"/> with empty
+    /// XDC-specific fields.  Used for the genesis block (created from chain-spec JSON, not RLP)
+    /// and any other non-XDC header that must be sent on the wire in 18-field XDC format.
+    /// </summary>
+    private static XdcBlockHeader AsXdcHeader(BlockHeader src) =>
+        new(src.ParentHash, src.UnclesHash, src.Beneficiary,
+            src.Difficulty, src.Number, src.GasLimit,
+            src.Timestamp, src.ExtraData)
+        {
+            StateRoot = src.StateRoot,
+            TxRoot = src.TxRoot,
+            ReceiptsRoot = src.ReceiptsRoot,
+            Bloom = src.Bloom,
+            GasUsed = src.GasUsed,
+            MixHash = src.MixHash,
+            Nonce = src.Nonce,
+            BaseFeePerGas = src.BaseFeePerGas,
+            Hash = src.Hash,
+        };
+
     public void Encode(RlpStream rlpStream, BlockHeader? header, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
     {
         if (header is null)
@@ -146,8 +167,10 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
             return;
         }
 
+        // Promote a plain BlockHeader (e.g. genesis from chain-spec) to XdcBlockHeader with
+        // empty validator fields so we always write the 18-field XDC format on the wire.
         if (header is not XdcBlockHeader h)
-            throw new ArgumentException("Must be XdcBlockHeader.", nameof(header));
+            h = AsXdcHeader(header);
 
         bool notForSealing = (rlpBehaviors & RlpBehaviors.ForSealing) != RlpBehaviors.ForSealing;
         rlpStream.StartSequence(GetContentLength(h, rlpBehaviors));
@@ -184,11 +207,10 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
             return Rlp.OfEmptySequence;
         }
 
-        if (item is not XdcBlockHeader header)
-            throw new ArgumentException("Must be XdcBlockHeader.", nameof(header));
+        XdcBlockHeader header = item as XdcBlockHeader ?? AsXdcHeader(item);
 
         RlpStream rlpStream = new(GetLength(header, rlpBehaviors));
-        Encode(rlpStream, item, rlpBehaviors);
+        Encode(rlpStream, header, rlpBehaviors);
 
         return new Rlp(rlpStream.Data.ToArray());
     }
@@ -231,11 +253,10 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
 
     public int GetLength(BlockHeader? item, RlpBehaviors rlpBehaviors)
     {
-        if (item is not XdcBlockHeader header)
-        {
-            // Fall back to standard header decoder for non-XDC headers (e.g., Ethereum conformance tests)
-            return new HeaderDecoder().GetLength(item, rlpBehaviors);
-        }
+        if (item is null) return Rlp.LengthOfSequence(0);
+        // Always compute length as an XDC header (18 fields) so GetLength and Encode agree.
+        // A plain BlockHeader (e.g. genesis) is wrapped with empty validator fields.
+        XdcBlockHeader header = item as XdcBlockHeader ?? AsXdcHeader(item);
         return Rlp.LengthOfSequence(GetContentLength(header, rlpBehaviors));
     }
 }

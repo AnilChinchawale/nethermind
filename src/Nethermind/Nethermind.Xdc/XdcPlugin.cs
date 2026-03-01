@@ -64,8 +64,13 @@ public class XdcPlugin(ChainSpec chainSpec) : IConsensusPlugin
             var xdcHeaderDecoder = new XdcHeaderDecoder();
             Rlp.RegisterDecoder(typeof(BlockHeader), xdcHeaderDecoder);
             Rlp.RegisterDecoder(typeof(Block), new BlockDecoder(xdcHeaderDecoder));
+            // Also override the static encoder in RlpStream so that BlockHeadersMessage
+            // serialization (outbound to peers) uses the 18-field XDC format instead of
+            // the standard 15-field Ethereum format.  Without this, XDC geth peers receive
+            // malformed headers and disconnect with BreachOfProtocol (DiscProtocolError).
+            RlpStream.SetHeaderDecoder(xdcHeaderDecoder);
             if (_logger is { IsInfo: true } logger)
-                logger.Info("Registered XdcHeaderDecoder as global BlockHeader/Block decoder");
+                logger.Info("Registered XdcHeaderDecoder as global BlockHeader/Block decoder (RlpStream + Rlp.Decoders)");
         }
 
         return Task.CompletedTask;
