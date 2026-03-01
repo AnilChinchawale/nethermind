@@ -196,7 +196,7 @@ public class XdcRewardCalculator : IRewardCalculator, IRewardCalculatorSource
                 if (sender is null) continue;
 
                 // Extract signed block number and hash from tx data
-                byte[] txData = tx.Data?.ToArray() ?? Array.Empty<byte>();
+                byte[] txData = tx.Data.ToArray();
                 if (txData.Length < 64) continue;
 
                 // First 32 bytes: block number (big-endian UInt256)
