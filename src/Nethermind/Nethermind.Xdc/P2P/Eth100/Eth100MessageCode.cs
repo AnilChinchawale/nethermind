@@ -6,7 +6,7 @@ namespace Nethermind.Xdc.P2P.Eth100
     /// <summary>
     /// XDC Network eth/100 protocol message codes
     /// Extends standard Ethereum eth/63 with XDPoS v2 consensus messages
-    /// 
+    ///
     /// IMPORTANT: geth-xdc uses 0xe0-0xe2 for consensus messages (NOT 0x11-0x14)
     /// This requires MessageIdSpaceSize = 227 (0xe2 + 1)
     /// Reference: XDC geth eth/protocols/xdcHandler.go
