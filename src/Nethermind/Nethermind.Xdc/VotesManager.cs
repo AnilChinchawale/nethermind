@@ -26,14 +26,14 @@ internal class VotesManager(
     IQuorumCertificateManager quorumCertificateManager,
     ISpecProvider specProvider,
     ISigner signer,
-    IForensicsProcessor forensicsProcessor) : IVotesManager
+    IForensicsProcessor? forensicsProcessor = null) : IVotesManager
 {
     private IBlockTree _blockTree = tree;
     private IEpochSwitchManager _epochSwitchManager = epochSwitchManager;
     private ISnapshotManager _snapshotManager = snapshotManager;
     private IQuorumCertificateManager _quorumCertificateManager = quorumCertificateManager;
     private IXdcConsensusContext _ctx = context;
-    private IForensicsProcessor _forensicsProcessor = forensicsProcessor;
+    private IForensicsProcessor? _forensicsProcessor = forensicsProcessor;
     private ISpecProvider _specProvider = specProvider;
     private ISigner _signer = signer;
 
@@ -81,8 +81,11 @@ internal class VotesManager(
         // Collect votes
         _votePool.Add(vote);
         IReadOnlyCollection<Vote> roundVotes = _votePool.GetItems(vote);
-        _ = _forensicsProcessor.DetectEquivocationInVotePool(vote, roundVotes);
-        _ = _forensicsProcessor.ProcessVoteEquivocation(vote);
+        if (_forensicsProcessor is not null)
+        {
+            _ = _forensicsProcessor.DetectEquivocationInVotePool(vote, roundVotes);
+            _ = _forensicsProcessor.ProcessVoteEquivocation(vote);
+        }
 
         XdcBlockHeader proposedHeader = _blockTree.FindHeader(vote.ProposedBlockInfo.Hash, vote.ProposedBlockInfo.BlockNumber) as XdcBlockHeader;
         if (proposedHeader is null)
