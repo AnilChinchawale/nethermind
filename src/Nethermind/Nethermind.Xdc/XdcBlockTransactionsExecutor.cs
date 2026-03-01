@@ -16,9 +16,7 @@ using Nethermind.Consensus.Processing;
 using Nethermind.Core;
 using Nethermind.Evm.State;
 using Nethermind.Evm.TransactionProcessing;
-using Nethermind.Evm.Tracing;
 using Nethermind.Logging;
-using Nethermind.State;
 using Nethermind.Trie;
 
 namespace Nethermind.Xdc;
@@ -57,54 +55,22 @@ internal class XdcBlockTransactionsExecutor : BlockProcessor.BlockValidationTran
         {
             // XDC GasBailout: log and skip — insufficient balance due to state root divergence.
             // IMPORTANT: StartNewTxTrace was called before Execute, but EndTxTrace was NOT called
-            // (exception thrown during BuyGas). We must call MarkAsFailed() THEN EndTxTrace() so
-            // a proper failed receipt is added — without it the tracer state gets corrupted and
-            // subsequent blocks crash with ArgumentOutOfRangeException.
-            try
-            {
-                receiptsTracer.MarkAsFailed(
-                    currentTx.To ?? Address.Zero,
-                    new GasConsumed(0, 0),
-                    Array.Empty<byte>(),
-                    ex.Message);
-                receiptsTracer.EndTxTrace();
-            }
-            catch { /* tracer may be in invalid state; ignore */ }
+            // (exception thrown during BuyGas). Call EndTxTrace() here so a failed receipt is
+            // added — without it the receipt count won't match the transaction count and
+            // BlockValidator throws ReceiptCountMismatch (InvalidDataException at block 528681).
+            try { receiptsTracer.EndTxTrace(); } catch { /* tracer may be in invalid state; ignore */ }
 
             if (_logger.IsWarn)
                 _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: {ex.Message.Split('\n')[0]} — skipping (insufficient balance)");
-        }
-        catch (InsufficientBalanceException ex)
-        {
-            // XDC GasBailout: insufficient balance during EVM value transfer (CALL/CREATE).
-            // This is thrown from StateProvider.SubtractFromBalance during contract execution.
-            // We must add a failed receipt so receipt count matches tx count.
-            receiptsTracer.MarkAsFailed(
-                currentTx.To ?? Address.Zero,
-                new GasConsumed(0, 0),
-                Array.Empty<byte>(),
-                ex.Message);
-            receiptsTracer.EndTxTrace();
-
-            if (_logger.IsWarn)
-                _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: {ex.Message} — skipping (insufficient balance for transfer)");
         }
         catch (MissingTrieNodeException ex)
         {
             // XDC GasBailout: missing trie node — state DB is incomplete, skip this tx
             // This happens when state root diverges and a trie node is not in RocksDB.
-            // IMPORTANT: Must call MarkAsFailed() THEN EndTxTrace() to create a proper failed
-            // receipt — calling EndTxTrace() alone corrupts tracer state.
-            try
-            {
-                receiptsTracer.MarkAsFailed(
-                    currentTx.To ?? Address.Zero,
-                    new GasConsumed(0, 0),
-                    Array.Empty<byte>(),
-                    $"MissingTrieNode: {ex.Hash}");
-                receiptsTracer.EndTxTrace();
-            }
-            catch { /* tracer already in invalid state; ignore */ }
+            // IMPORTANT: StartNewTxTrace was called but EndTxTrace was NOT (exception was thrown
+            // during Execute before the extension method's EndTxTrace could run). We must call
+            // EndTxTrace here so _currentIndex is incremented correctly for subsequent txs.
+            try { receiptsTracer.EndTxTrace(); } catch { /* tracer already in invalid state; ignore */ }
 
             if (_logger.IsWarn)
                 _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: MissingTrieNode {ex.Hash} — skipping (state divergence)");
