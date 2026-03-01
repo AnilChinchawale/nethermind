@@ -88,11 +88,11 @@ namespace Nethermind.Synchronization.ParallelSync
             _betterPeerStrategy = betterPeerStrategy ?? throw new ArgumentNullException(nameof(betterPeerStrategy));
             _syncProgressResolver = syncProgressResolver ?? throw new ArgumentNullException(nameof(syncProgressResolver));
             _needToWaitForHeaders = syncConfig.NeedToWaitForHeader;
-            
+
             // XDC chain detection: chainId 50 (mainnet) or 51 (apothem/testnet)
             _chainId = blockTree?.ChainId ?? 0;
             _isXdcChain = _chainId == 50 || _chainId == 51;
-            
+
             if (_isXdcChain && _logger.IsInfo)
                 _logger.Info($"XDC chain detected (chainId={_chainId}). Full sync mode will be enforced.");
 
@@ -174,7 +174,7 @@ namespace Nethermind.Synchronization.ParallelSync
                     long bestBlock = Math.Max(_syncProgressResolver.FindBestProcessedBlock(), _syncProgressResolver.FindBestHeader());
                     bool notCaughtUpYet = bestBlock < peerBlock.Value - 10; // 10 block tolerance
                     bool hasUsefulPeers = peerBlock.Value > 0;
-                    
+
                     if (hasUsefulPeers && notCaughtUpYet)
                     {
                         newModes = SyncMode.Full;
