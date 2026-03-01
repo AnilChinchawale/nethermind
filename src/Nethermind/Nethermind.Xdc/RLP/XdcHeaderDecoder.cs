@@ -232,7 +232,10 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
     public int GetLength(BlockHeader? item, RlpBehaviors rlpBehaviors)
     {
         if (item is not XdcBlockHeader header)
-            throw new ArgumentException("Must be XdcBlockHeader.", nameof(header));
+        {
+            // Fall back to standard header decoder for non-XDC headers (e.g., Ethereum conformance tests)
+            return new HeaderDecoder().GetLength(item, rlpBehaviors);
+        }
         return Rlp.LengthOfSequence(GetContentLength(header, rlpBehaviors));
     }
 }
