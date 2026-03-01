@@ -16,6 +16,7 @@ using Nethermind.Consensus.Processing;
 using Nethermind.Core;
 using Nethermind.Evm.State;
 using Nethermind.Evm.TransactionProcessing;
+using Nethermind.Evm.Tracing;
 using Nethermind.Logging;
 using Nethermind.State;
 using Nethermind.Trie;
@@ -67,9 +68,14 @@ internal class XdcBlockTransactionsExecutor : BlockProcessor.BlockValidationTran
         catch (InsufficientBalanceException ex)
         {
             // XDC GasBailout: insufficient balance during EVM value transfer (CALL/CREATE).
-            // This is thrown from StateProvider.SubtractFromBalance during contract execution,
-            // NOT during BuyGas. Happens when state divergence causes different account balances.
-            try { receiptsTracer.EndTxTrace(); } catch { /* ignore */ }
+            // This is thrown from StateProvider.SubtractFromBalance during contract execution.
+            // We must add a failed receipt so receipt count matches tx count.
+            receiptsTracer.MarkAsFailed(
+                currentTx.To ?? Address.Zero,
+                new GasConsumed(0, 0),
+                Array.Empty<byte>(),
+                ex.Message);
+            receiptsTracer.EndTxTrace();
 
             if (_logger.IsWarn)
                 _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: {ex.Message} — skipping (insufficient balance for transfer)");
