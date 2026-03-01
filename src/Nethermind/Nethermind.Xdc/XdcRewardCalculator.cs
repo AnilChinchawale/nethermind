@@ -8,11 +8,14 @@ using Nethermind.Blockchain;
 using Nethermind.Consensus.Rewards;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
+using Nethermind.Core.Specs;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Int256;
 using Nethermind.Logging;
 using Nethermind.Evm.State;
 using Nethermind.Crypto;
+using Nethermind.Xdc.Contracts;
+using Nethermind.Xdc.Spec;
 
 namespace Nethermind.Xdc;
 
