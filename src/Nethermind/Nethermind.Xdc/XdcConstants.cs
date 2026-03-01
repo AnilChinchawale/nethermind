@@ -64,9 +64,24 @@ public static class XdcConstants
     public const long TargetGasLimit = 420000000;
 
     /// <summary>
-    /// Nonce value indicating a "drop vote" (validator wants to leave)
+    /// Number of bytes reserved for validator vanity in block extra data
     /// </summary>
-    public const ulong NonceDropVoteValue = 18446744073709551615; // max ulong
+    public const int ExtraVanity = 32;
+
+    /// <summary>
+    /// Number of bytes reserved for ECDSA seal signature in block extra data
+    /// </summary>
+    public const int ExtraSeal = 65;
+
+    /// <summary>
+    /// Nonce value indicating an "auth vote" (validator wants to join) = 0xffffffffffffffff
+    /// </summary>
+    public const ulong NonceAuthVoteValue = ulong.MaxValue;
+
+    /// <summary>
+    /// Nonce value indicating a "drop vote" (validator wants to leave) = 0x0000000000000000
+    /// </summary>
+    public const ulong NonceDropVoteValue = 0;
 
     /// <summary>
     /// RocksDB key name for XDPoS snapshot persistence.

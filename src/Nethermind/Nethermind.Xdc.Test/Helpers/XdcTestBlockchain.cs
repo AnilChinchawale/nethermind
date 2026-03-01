@@ -221,7 +221,8 @@ public class XdcTestBlockchain : TestBlockchain
         xdcSpec.GasLimitBoundDivisor = 1024;
 
         V2ConfigParams[] v2ConfigParams = [
-            new V2ConfigParams {
+            new V2ConfigParams
+            {
                 SwitchRound = 0,
                 MaxMasternodes = 30,
                 CertThreshold = 0.667,
@@ -229,7 +230,8 @@ public class XdcTestBlockchain : TestBlockchain
                 TimeoutPeriod = 3000,
                 MinePeriod = 2
             },
-            new V2ConfigParams {
+            new V2ConfigParams
+            {
                 SwitchRound = 5,
                 MaxMasternodes = 30,
                 CertThreshold = 0.667,
@@ -237,7 +239,8 @@ public class XdcTestBlockchain : TestBlockchain
                 TimeoutPeriod = 3000,
                 MinePeriod = 2
             },
-            new V2ConfigParams {
+            new V2ConfigParams
+            {
                 SwitchRound = 10,
                 MaxMasternodes = 30,
                 CertThreshold = 0.667,
@@ -245,7 +248,8 @@ public class XdcTestBlockchain : TestBlockchain
                 TimeoutPeriod = 3000,
                 MinePeriod = 2
             },
-            new V2ConfigParams {
+            new V2ConfigParams
+            {
                 SwitchRound = 15,
                 MaxMasternodes = 30,
                 CertThreshold = 0.667,
@@ -253,7 +257,8 @@ public class XdcTestBlockchain : TestBlockchain
                 TimeoutPeriod = 3000,
                 MinePeriod = 2
             },
-            new V2ConfigParams {
+            new V2ConfigParams
+            {
                 SwitchRound = 20,
                 MaxMasternodes = 30,
                 CertThreshold = 0.667,

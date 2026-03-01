@@ -291,7 +291,7 @@ public class BackgroundTaskScheduler : IBackgroundTaskScheduler, IAsyncDisposabl
             workerThreads = [.. Enumerable.Range(0, maxDegreeOfParallelism)
                             .Select(i =>
                             {
-                                Thread thread = new (ProcessBackgroundTasks)
+                                Thread thread = new(ProcessBackgroundTasks)
                                 {
                                     IsBackground = true,
                                     Priority = ThreadPriority.BelowNormal,

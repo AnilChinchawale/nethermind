@@ -25,20 +25,20 @@ namespace Nethermind.Xdc;
 public class XdcCoinbaseResolver
 {
     // Validator contract address (MasternodeVotingSMC)
-    public static readonly Address ValidatorContractAddress = 
+    public static readonly Address ValidatorContractAddress =
         new("0x0000000000000000000000000000000000000088");
-    
+
     // Foundation wallet (used as fallback)
-    public static readonly Address FoundationWallet = 
+    public static readonly Address FoundationWallet =
         new("0x92a289fe95a85c53b8d0d113cbaef0c1ec98ac65");
-    
+
     // Slot positions in the validator contract
     private const ulong ValidatorsStateSlot = 1;  // validatorsState mapping slot
-    
+
     // Extra data format for V1: [32 bytes vanity][N*20 bytes signers (checkpoint only)][65 bytes seal]
     private const int ExtraVanity = 32;
     private const int ExtraSeal = 65;  // 65 bytes signature
-    
+
     private readonly ILogger _logger;
 
     public XdcCoinbaseResolver(ILogManager logManager)
@@ -149,7 +149,7 @@ public class XdcCoinbaseResolver
         // We need to compute the RLP hash similar to how XDC does it
         var stream = new RlpStream(GetHeaderRlpLength(header, extraDataWithoutSeal));
         EncodeHeaderForSigHash(stream, header, extraDataWithoutSeal);
-        
+
         return ValueKeccak.Compute(stream.Data);
     }
 
@@ -163,10 +163,10 @@ public class XdcCoinbaseResolver
         // Fields: parentHash, unclesHash, coinbase, stateRoot, txRoot, receiptsRoot, bloom,
         //         difficulty, number, gasLimit, gasUsed, timestamp, extraData(truncated), mixHash, nonce
         //         [+ optional BaseFee]
-        
+
         int contentLength = GetContentLength(header, extraDataWithoutSeal);
         stream.StartSequence(contentLength);
-        
+
         stream.Encode(header.ParentHash);
         stream.Encode(header.UnclesHash);
         stream.Encode(header.Beneficiary);
@@ -182,9 +182,9 @@ public class XdcCoinbaseResolver
         stream.Encode(extraDataWithoutSeal);
         stream.Encode(header.MixHash);
         stream.Encode(header.Nonce, 8);  // 8 bytes for nonce
-        
+
         // NOTE: Do NOT include Validators/Validator/Penalties - geth-xdc sigHash doesn't include them!
-        
+
         // BaseFee only if present (XDC doesn't use it, but keep for compatibility)
         if (!header.BaseFeePerGas.IsZero)
         {
@@ -210,14 +210,14 @@ public class XdcCoinbaseResolver
         length += Rlp.LengthOf(extraDataWithoutSeal);
         length += Rlp.LengthOf(header.MixHash);
         length += Rlp.LengthOfNonce(header.Nonce);
-        
+
         // NOTE: No XDC-specific fields in sigHash!
-        
+
         if (!header.BaseFeePerGas.IsZero)
         {
             length += Rlp.LengthOf(header.BaseFeePerGas);
         }
-        
+
         return length;
     }
 
@@ -288,7 +288,7 @@ public class XdcCoinbaseResolver
             // Compute the storage slot for validatorsState[signer].owner
             // locValidatorsState = keccak256(signer || slot)
             // locCandidateOwner = locValidatorsState + 0 (owner is first field)
-            
+
             UInt256 locValidatorsState = GetLocMappingAtKey(signer, ValidatorsStateSlot);
             UInt256 locCandidateOwner = locValidatorsState;  // + 0 for .owner field
 
@@ -298,7 +298,7 @@ public class XdcCoinbaseResolver
             ReadOnlySpan<byte> value = worldState.Get(storageCell);
 
             // Console.WriteLine($"[XDC-OWNER] Block signer {signer}: storage value length={value.Length}, hex={Convert.ToHexString(value)}");
-            
+
             if (value.Length == 0)
             {
                 Console.WriteLine($"[XDC-OWNER] No owner found for signer {signer} at slot {locCandidateOwner}");
@@ -309,10 +309,10 @@ public class XdcCoinbaseResolver
             if (value.Length >= 20)
             {
                 // The address is stored in the last 20 bytes of the 32-byte word
-                ReadOnlySpan<byte> addressBytes = value.Length >= 32 
+                ReadOnlySpan<byte> addressBytes = value.Length >= 32
                     ? value.Slice(12, 20)  // Skip first 12 bytes (padding)
                     : value.Slice(value.Length - 20, 20);
-                
+
                 Address owner = new Address(addressBytes.ToArray());
                 Console.WriteLine($"[XDC-OWNER] Resolved owner: {owner}");
                 return owner;
@@ -337,18 +337,18 @@ public class XdcCoinbaseResolver
     {
         // Create the input for keccak256: key (32 bytes, left-padded) || slot (32 bytes)
         Span<byte> input = stackalloc byte[64];
-        
+
         // Key is 20 bytes, left-pad with zeros to 32 bytes
         input.Slice(0, 12).Clear();  // First 12 bytes = 0
         key.Bytes.CopyTo(input.Slice(12, 20));  // Next 20 bytes = address
-        
+
         // Slot is uint64, encode as 32-byte big-endian
         input.Slice(32, 24).Clear();  // First 24 bytes = 0
         BinaryPrimitives.WriteUInt64BigEndian(input.Slice(56, 8), slot);
 
         // Compute keccak256
         ValueHash256 hash = ValueKeccak.Compute(input);
-        
+
         // Convert hash bytes to UInt256
         return new UInt256(hash.Bytes, isBigEndian: true);
     }

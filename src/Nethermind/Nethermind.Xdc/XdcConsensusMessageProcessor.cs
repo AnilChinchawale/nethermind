@@ -48,7 +48,7 @@ namespace Nethermind.Xdc
             // TODO: Validate vote signature
             // TODO: Check vote is for current/future round
             // TODO: Add to vote pool
-            
+
             if (_logger.IsDebug)
                 _logger.Debug($"Vote processed: {vote}");
         }
@@ -68,7 +68,7 @@ namespace Nethermind.Xdc
             // TODO: Validate timeout signature
             // TODO: Check timeout is for current/future round
             // TODO: Add to timeout pool
-            
+
             if (_logger.IsDebug)
                 _logger.Debug($"Timeout processed: {timeout}");
         }
@@ -88,7 +88,7 @@ namespace Nethermind.Xdc
             // TODO: Validate QC and TC in syncInfo
             // TODO: Update local consensus state if peer is ahead
             // TODO: Trigger sync if we're behind
-            
+
             if (_logger.IsDebug)
                 _logger.Debug($"SyncInfo processed: QC at {syncInfo?.HighestQuorumCert?.ProposedBlockInfo}, TC at {syncInfo?.HighestTimeoutCert?.Round}");
         }
@@ -109,7 +109,7 @@ namespace Nethermind.Xdc
             // TODO: Check QC is for valid block
             // TODO: Update highest QC if newer
             // TODO: Trigger finality updates
-            
+
             if (_logger.IsDebug)
                 _logger.Debug($"QC processed: {qc?.ProposedBlockInfo}");
         }

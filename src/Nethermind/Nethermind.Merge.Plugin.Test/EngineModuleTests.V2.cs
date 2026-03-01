@@ -459,7 +459,8 @@ public partial class EngineModuleTests
                 rpc.engine_getPayloadBodiesByRangeV1(1, 3).Result.Data;
             ExecutionPayloadBodyV1Result[] expected =
             [
-                new(Array.Empty<Transaction>(), withdrawals), new(txsA, withdrawals)
+                new(Array.Empty<Transaction>(), withdrawals),
+                new(txsA, withdrawals)
             ];
 
             payloadBodies.Should().BeEquivalentTo(expected, static o => o.WithStrictOrdering());

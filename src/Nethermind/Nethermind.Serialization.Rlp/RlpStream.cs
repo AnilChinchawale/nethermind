@@ -23,8 +23,18 @@ namespace Nethermind.Serialization.Rlp
 {
     public class RlpStream
     {
-        private static readonly HeaderDecoder _headerDecoder = new();
+        private static readonly HeaderDecoder _defaultHeaderDecoder = new();
         private static readonly BlockDecoder _blockDecoder = new();
+
+        // Allow plugin-registered header decoders (e.g. XdcHeaderDecoder) to replace the static default.
+        // Populated on demand so plugins have time to register via Rlp.RegisterDecoder() before first use.
+        private static volatile IHeaderDecoder? _overrideHeaderDecoder;
+
+        /// <summary>Override the header encoder used by Encode(BlockHeader). Called by chain-specific plugins during Init().</summary>
+        public static void SetHeaderDecoder(IHeaderDecoder decoder) => _overrideHeaderDecoder = decoder;
+
+        /// <summary>The active header decoder: plugin override if set, otherwise the default HeaderDecoder.</summary>
+        public static IHeaderDecoder ActiveHeaderDecoder => _overrideHeaderDecoder ?? _defaultHeaderDecoder;
         private static readonly BlockBodyDecoder _blockBodyDecoder = new();
         private static readonly BlockInfoDecoder _blockInfoDecoder = new();
         private static readonly TxDecoder _txDecoder = TxDecoder.Instance;
@@ -80,7 +90,7 @@ namespace Nethermind.Serialization.Rlp
         }
         public void Encode(Block value) => _blockDecoder.Encode(this, value);
 
-        public void Encode(BlockHeader value) => _headerDecoder.Encode(this, value);
+        public void Encode(BlockHeader value) => ActiveHeaderDecoder.Encode(this, value);
 
         public void Encode(Transaction value, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
             => _txDecoder.Encode(this, value, rlpBehaviors);

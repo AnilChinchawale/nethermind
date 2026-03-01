@@ -31,6 +31,12 @@ public class XdcReleaseSpec : ReleaseSpec, IXdcReleaseSpec
 
     public Address[] GenesisMasterNodes { get; set; }
 
+    // Reward-related properties for XdcRewardCalculator v2 API
+    public Address FoundationWallet { get; set; } = XdcConstants.FoundationWalletAddress;
+    public Address BlockSignerContract { get; set; } = XdcConstants.BlockSignersAddress;
+    public long Reward { get; set; } = 250;   // total reward per epoch in XDC (ether units)
+    public long MergeSignRange { get; set; } = 15; // only blocks divisible by this qualify
+
     public void ApplyV2Config(ulong round)
     {
         V2ConfigParams configParams = GetConfigAtRound(V2Configs, round);
@@ -96,6 +102,12 @@ public interface IXdcReleaseSpec : IReleaseSpec
     public int MinimumSigningTx { get; set; }            // Signing txs that a node needs to produce to get out of penalty, after `LimitPenaltyEpoch`
     public List<V2ConfigParams> V2Configs { get; set; }
     Address[] GenesisMasterNodes { get; set; }
+
+    // Reward-related properties for XdcRewardCalculator v2 API
+    Address FoundationWallet { get; set; }
+    Address BlockSignerContract { get; set; }
+    long Reward { get; set; }           // total reward per epoch in XDC (ether units)
+    long MergeSignRange { get; set; }   // only blocks divisible by this qualify
 
     public void ApplyV2Config(ulong round);
 }

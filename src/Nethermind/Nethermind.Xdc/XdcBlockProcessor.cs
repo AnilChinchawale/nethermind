@@ -38,7 +38,7 @@ internal class XdcBlockProcessor : BlockProcessor
     {
         // Save expected state root BEFORE we replace the header
         _expectedStateRoot = suggestedBlock.Header.StateRoot;
-        
+
         // If header isn't XdcBlockHeader (e.g. from cache), fall back to base implementation
         if (suggestedBlock.Header is not XdcBlockHeader bh)
             return base.PrepareBlockForProcessing(suggestedBlock);
@@ -49,14 +49,14 @@ internal class XdcBlockProcessor : BlockProcessor
         // See geth-xdc: core/evm.go (Coinbase = Author(header) = ecrecover), 
         //               core/state_transition.go lines 388-400 (owner resolution for TIPTRC21Fee+)
         const ulong TIPTRC21Fee = 38383838;  // Mainnet value
-        
+
         Address resolvedBeneficiary = suggestedBlock.Header.Beneficiary;
-        
+
         try
         {
             // Always ecrecover the signer from the header seal - this is what geth uses as evm.Context.Coinbase
             Address signer = _coinbaseResolver.RecoverSigner(suggestedBlock.Header);
-            
+
             if ((ulong)suggestedBlock.Header.Number >= TIPTRC21Fee)
             {
                 // After TIPTRC21Fee: resolve the signer's owner from 0x88 contract
@@ -201,13 +201,13 @@ internal class XdcBlockProcessor : BlockProcessor
         {
             padded[i] = new TxReceipt
             {
-                TxHash       = block.Transactions[i].Hash,
-                BlockNumber  = block.Number,
-                BlockHash    = block.Hash,
-                Index        = i,
-                Error        = "xdc-gasbailout-skip",
+                TxHash = block.Transactions[i].Hash,
+                BlockNumber = block.Number,
+                BlockHash = block.Hash,
+                Index = i,
+                Error = "xdc-gasbailout-skip",
                 GasUsedTotal = gasUsedSoFar,   // cumulative gas unchanged (tx was not executed)
-                StatusCode   = Nethermind.Evm.StatusCode.Failure,
+                StatusCode = Nethermind.Evm.StatusCode.Failure,
             };
         }
         return padded;
