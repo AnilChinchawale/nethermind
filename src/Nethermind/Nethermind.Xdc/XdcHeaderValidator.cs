@@ -17,13 +17,17 @@ namespace Nethermind.Xdc;
 /// </summary>
 internal class XdcHeaderValidator : HeaderValidator
 {
+    private readonly IQuorumCertificateManager _qcManager;
+
     public XdcHeaderValidator(
         IBlockTree blockTree,
+        IQuorumCertificateManager qcManager,
         ISealValidator sealValidator,
         ISpecProvider specProvider,
         ILogManager logManager)
         : base(blockTree, sealValidator, specProvider, logManager)
     {
+        _qcManager = qcManager;
     }
 
     /// <summary>

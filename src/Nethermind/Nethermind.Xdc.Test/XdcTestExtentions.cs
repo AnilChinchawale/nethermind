@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using System;
 using Nethermind.Core.Crypto;
 using Nethermind.Int256;
 using Nethermind.Xdc;
@@ -32,9 +33,9 @@ public static class BuildExtentions
     {
         byte[] data = new byte[64];
         // First 32 bytes: block number as big-endian UInt256
-        new UInt256((ulong)blockNumber).ToBigEndian(data.AsSpan(0, 32));
+        new UInt256((ulong)blockNumber).ToBigEndian(new Span<byte>(data, 0, 32));
         // Last 32 bytes: block hash
-        blockHash.Bytes.CopyTo(data.AsSpan(32, 32));
+        blockHash.Bytes.CopyTo(new Span<byte>(data, 32, 32));
         return builder.WithData(data);
     }
 
