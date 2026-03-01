@@ -81,6 +81,41 @@ public class XdcModule : Module
         }).As<ISnapshotManager>()
           .SingleInstance();
 
+        // Register XDC consensus context (shared mutable round/QC/TC state)
+        builder.RegisterType<XdcConsensusContext>()
+            .As<IXdcConsensusContext>()
+            .SingleInstance();
+
+        // Register epoch switch manager (epoch boundary detection and masternode set tracking)
+        builder.RegisterType<EpochSwitchManager>()
+            .As<IEpochSwitchManager>()
+            .SingleInstance();
+
+        // Register sync info manager (tracks highest QC/TC for peer sync messages)
+        builder.RegisterType<SyncInfoManager>()
+            .As<ISyncInfoManager>()
+            .SingleInstance();
+
+        // Register quorum certificate manager (QC aggregation and finalization)
+        builder.RegisterType<QuorumCertificateManager>()
+            .As<IQuorumCertificateManager>()
+            .SingleInstance();
+
+        // Register timeout certificate manager (TC aggregation for view changes)
+        builder.RegisterType<TimeoutCertificateManager>()
+            .As<ITimeoutCertificateManager>()
+            .SingleInstance();
+
+        // Register votes manager (vote collection and threshold tracking)
+        builder.RegisterType<VotesManager>()
+            .As<IVotesManager>()
+            .SingleInstance();
+
+        // Register timeout timer (drives round timeout → TC creation)
+        builder.RegisterType<TimeoutTimer>()
+            .As<ITimeoutTimer>()
+            .SingleInstance();
+
         // Register XDC-specific genesis builder that uses XdcBlockHeader
         builder.RegisterType<XdcGenesisBuilder>()
             .As<IGenesisBuilder>()
