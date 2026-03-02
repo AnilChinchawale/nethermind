@@ -132,6 +132,27 @@ public abstract class BaseXdcHeaderDecoder<TH> : IHeaderDecoder where TH : XdcBl
         return header;
     }
 
+    /// <summary>
+    /// Wraps a plain <see cref="BlockHeader"/> as a <typeparamref name="TH"/> with empty XDC-specific fields.
+    /// Used for genesis blocks created from chain-spec JSON (not decoded from RLP) and any other
+    /// non-XDC header that must be sent on the wire in 18-field XDC format.
+    /// </summary>
+    private TH AsXdcHeader(BlockHeader src)
+    {
+        TH h = CreateHeader(src.ParentHash, src.UnclesHash, src.Beneficiary,
+            src.Difficulty, src.Number, src.GasLimit, src.Timestamp, src.ExtraData);
+        h.StateRoot = src.StateRoot;
+        h.TxRoot = src.TxRoot;
+        h.ReceiptsRoot = src.ReceiptsRoot;
+        h.Bloom = src.Bloom;
+        h.GasUsed = src.GasUsed;
+        h.MixHash = src.MixHash;
+        h.Nonce = src.Nonce;
+        h.BaseFeePerGas = src.BaseFeePerGas;
+        h.Hash = src.Hash;
+        return h;
+    }
+
     public void Encode(RlpStream rlpStream, BlockHeader? header, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
     {
         if (header is null)
@@ -140,8 +161,10 @@ public abstract class BaseXdcHeaderDecoder<TH> : IHeaderDecoder where TH : XdcBl
             return;
         }
 
+        // Promote a plain BlockHeader (e.g. genesis from chain-spec) to TH with empty XDC fields
+        // so we always write the 18-field XDC format on the wire.
         if (header is not TH h)
-            throw new ArgumentException($"Must be {typeof(TH).Name}.", nameof(header));
+            h = AsXdcHeader(header);
 
         rlpStream.StartSequence(GetContentLength(h, rlpBehaviors));
 
@@ -172,18 +195,19 @@ public abstract class BaseXdcHeaderDecoder<TH> : IHeaderDecoder where TH : XdcBl
             return Rlp.OfEmptySequence;
         }
 
-        if (item is not TH header)
-            throw new ArgumentException($"Must be {typeof(TH).Name}.", nameof(item));
+        TH header = item as TH ?? AsXdcHeader(item);
 
-        RlpStream rlpStream = new(GetLength(item, rlpBehaviors));
-        Encode(rlpStream, item, rlpBehaviors);
+        RlpStream rlpStream = new(GetLength(header, rlpBehaviors));
+        Encode(rlpStream, header, rlpBehaviors);
         return new Rlp(rlpStream.Data.ToArray());
     }
 
     public int GetLength(BlockHeader? item, RlpBehaviors rlpBehaviors)
     {
-        if (item is not TH header)
-            throw new ArgumentException($"Must be {typeof(TH).Name}.", nameof(item));
+        if (item is null) return Rlp.LengthOfSequence(0);
+        // Always compute length as an XDC header (18 fields) so GetLength and Encode agree.
+        // A plain BlockHeader (e.g. genesis) is wrapped with empty XDC-specific fields.
+        TH header = item as TH ?? AsXdcHeader(item);
 
         return Rlp.LengthOfSequence(GetContentLength(header, rlpBehaviors));
     }
