@@ -6,6 +6,7 @@ using Autofac;
 using Nethermind.Blockchain;
 using Nethermind.Core;
 using Nethermind.Core.Container;
+using Nethermind.Core.Specs;
 using Nethermind.Consensus;
 using Nethermind.Consensus.Processing;
 using Nethermind.Crypto;
@@ -102,6 +103,47 @@ public class XdcModule : Module
         builder.RegisterType<XdcHeaderValidator>()
             .As<Nethermind.Consensus.Validators.IHeaderValidator>()
             .SingleInstance();
+
+        // ── XDPoS Seal Validators (V1 + V2 dispatching) ────────────────────────
+        // Register V2 seal validator (for blocks >= SwitchBlock)
+        builder.RegisterType<XdcSealValidator>()
+            .AsSelf()
+            .SingleInstance();
+
+        // Register V1 seal validator (for blocks < SwitchBlock)
+        builder.RegisterType<XdcV1SealValidator>()
+            .AsSelf()
+            .SingleInstance();
+
+        // Register dispatching seal validator that routes to V1 or V2 based on block number
+        builder.Register(ctx =>
+        {
+            var v1 = ctx.Resolve<XdcV1SealValidator>();
+            var v2 = ctx.Resolve<XdcSealValidator>();
+            var chainSpec = ctx.Resolve<ChainSpec>();
+
+            long switchBlock = 0;
+            bool skipV1 = false;
+
+            if (chainSpec.EngineChainSpecParametersProvider is not null)
+            {
+                try
+                {
+                    var xdcParams = chainSpec.EngineChainSpecParametersProvider
+                        .GetChainSpecParameters<XdcChainSpecEngineParameters>();
+                    switchBlock = xdcParams.SwitchBlock;
+                    skipV1 = xdcParams.SkipV1Validation;
+                }
+                catch
+                {
+                    // Fallback: treat all blocks as V2 if params not found
+                    skipV1 = true;
+                }
+            }
+
+            return new XdcDispatchingSealValidator(v1, v2, switchBlock, skipV1);
+        }).As<ISealValidator>()
+          .SingleInstance();
 
         // Register XDC reward calculator for checkpoint block rewards
         // NOTE: We only register as IRewardCalculatorSource, NOT as IRewardCalculator directly.
