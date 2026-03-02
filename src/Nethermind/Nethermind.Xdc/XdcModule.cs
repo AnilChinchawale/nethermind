@@ -74,7 +74,9 @@ public class XdcModule : Module
 
             // Validators
             .AddSingleton<IHeaderValidator, XdcHeaderValidator>()
-            .AddSingleton<ISealValidator, XdcSealValidator>()
+            .AddSingleton<XdcSealValidator>()
+            .AddSingleton<XdcV1SealValidator>()
+            .AddSingleton<ISealValidator, XdcV1SealValidator, XdcSealValidator, XdcChainSpecEngineParameters>(CreateDispatchingSealValidator)
             .AddSingleton<IUnclesValidator, MustBeEmptyUnclesValidator>()
 
             // managers
@@ -99,6 +101,14 @@ public class XdcModule : Module
             // block processing
             .AddScoped<ITransactionProcessor, XdcTransactionProcessor>()
             ;
+    }
+
+    private static ISealValidator CreateDispatchingSealValidator(
+        XdcV1SealValidator v1,
+        XdcSealValidator v2,
+        XdcChainSpecEngineParameters xdcParams)
+    {
+        return new XdcDispatchingSealValidator(v1, v2, xdcParams.SwitchBlock, xdcParams.SkipV1Validation);
     }
 
     private ISnapshotManager CreateSnapshotManager([KeyFilter(SnapshotDbName)] IDb db, IBlockTree blockTree, IPenaltyHandler penaltyHandler, IMasternodeVotingContract votingContract, ISpecProvider specProvider)
