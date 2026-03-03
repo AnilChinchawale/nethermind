@@ -8,6 +8,7 @@ using Nethermind.Core.Specs;
 using Nethermind.Crypto;
 using Nethermind.Serialization.Rlp;
 using Nethermind.Xdc.Spec;
+using Nethermind.Xdc.Types;
 using System;
 using System.Linq;
 
