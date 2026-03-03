@@ -432,9 +432,9 @@ internal class XdcV1SealValidatorTests
     private static XdcBlockHeader CloneForSealing(XdcBlockHeader src, byte[] extraData)
     {
         return new XdcBlockHeader(
-            src.ParentHash,
-            src.UnclesHash,
-            src.Beneficiary,
+            src.ParentHash!,
+            src.UnclesHash!,
+            src.Beneficiary!,
             src.Difficulty,
             src.Number,
             src.GasLimit,
