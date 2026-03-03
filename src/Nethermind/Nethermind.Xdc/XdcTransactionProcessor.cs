@@ -155,7 +155,7 @@ internal class XdcTransactionProcessor(
 
         bool restore = opts.HasFlag(ExecutionOptions.Restore);
 
-        // maybe a better approach would be adding an XdcGasPolicy 
+        // maybe a better approach would be adding an XdcGasPolicy
         TransactionResult result;
         _ = RecoverSenderIfNeeded(tx, spec, opts, UInt256.Zero);
         IntrinsicGas<EthereumGasPolicy> intrinsicGas = CalculateIntrinsicGas(tx, spec);

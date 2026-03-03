@@ -56,7 +56,7 @@ internal class XdcReorgModuleTests
 
         if (blockChain.BlockTree.Head!.Hash != forkParent.Hash)
         {
-            //Wait for new head 
+            //Wait for new head
             await Task.WhenAny(newHeadWaitHandle.Task, Task.Delay(5_000));
         }
 

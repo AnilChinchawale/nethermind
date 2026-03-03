@@ -360,7 +360,7 @@ internal class XdcV1SealValidatorTests
         int extraDataLength = MinExtraDataLength,
         ulong nonce = 0)
     {
-        var header = Build.A.XdcBlockHeader()
+        XdcBlockHeader header = (XdcBlockHeader)Build.A.XdcBlockHeader()
             .WithNumber(blockNumber)
             .WithDifficulty(difficulty)
             .WithNonce(nonce)
@@ -393,7 +393,7 @@ internal class XdcV1SealValidatorTests
             TestItem.AddressA.Bytes.CopyTo(validators.AsSpan(i * Address.Size));
         }
 
-        var header = Build.A.XdcBlockHeader()
+        XdcBlockHeader header = (XdcBlockHeader)Build.A.XdcBlockHeader()
             .WithNumber(blockNumber)
             .WithDifficulty(difficulty)
             .WithNonce(nonce)
