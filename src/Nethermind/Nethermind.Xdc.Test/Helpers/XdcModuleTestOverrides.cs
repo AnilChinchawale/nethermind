@@ -49,6 +49,9 @@ public class XdcModuleTestOverrides(IConfigProvider configProvider, ILogManager 
             .AddModule(new PseudoNetworkModule())
             .AddModule(new TestBlockProcessingModule())
 
+            // V1 validation skipped in tests: all test blocks use V2 (SwitchBlock=0)
+            .AddSingleton(new XdcChainSpecEngineParameters { SwitchBlock = 0, SkipV1Validation = true })
+
             .AddSingleton<IMasternodeVotingContract, XdcTestDepositContract>()
 
             // add missing components
