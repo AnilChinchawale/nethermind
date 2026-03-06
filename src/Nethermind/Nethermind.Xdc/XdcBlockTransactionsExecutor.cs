@@ -17,6 +17,7 @@ using Nethermind.Core;
 using Nethermind.Evm.State;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Logging;
+using Nethermind.State;
 using Nethermind.Trie;
 
 namespace Nethermind.Xdc;
@@ -62,6 +63,17 @@ internal class XdcBlockTransactionsExecutor : BlockProcessor.BlockValidationTran
 
             if (_logger.IsWarn)
                 _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: {ex.Message.Split('\n')[0]} — skipping (insufficient balance)");
+        }
+        catch (InsufficientBalanceException ex)
+        {
+            // XDC GasBailout: InsufficientBalanceException is thrown by StateProvider.SetNewBalance
+            // when subtracting tx value from sender. This is a StateException (not InvalidTransactionException)
+            // and occurs when NM state diverges from geth at XDPoS checkpoint reward blocks.
+            // The sender has valid genesis balance but NM's diverged state shows insufficient funds.
+            try { receiptsTracer.EndTxTrace(); } catch { /* tracer may be in invalid state; ignore */ }
+
+            if (_logger.IsWarn)
+                _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: InsufficientBalance {ex.Message.Split('\n')[0]} — skipping (state divergence)");
         }
         catch (MissingTrieNodeException ex)
         {
