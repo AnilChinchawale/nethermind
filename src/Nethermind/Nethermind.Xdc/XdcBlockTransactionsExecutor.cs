@@ -78,14 +78,28 @@ internal class XdcBlockTransactionsExecutor : BlockProcessor.BlockValidationTran
         catch (MissingTrieNodeException ex)
         {
             // XDC GasBailout: missing trie node — state DB is incomplete, skip this tx
-            // This happens when state root diverges and a trie node is not in RocksDB.
-            // IMPORTANT: StartNewTxTrace was called but EndTxTrace was NOT (exception was thrown
-            // during Execute before the extension method's EndTxTrace could run). We must call
-            // EndTxTrace here so _currentIndex is incremented correctly for subsequent txs.
             try { receiptsTracer.EndTxTrace(); } catch { /* tracer already in invalid state; ignore */ }
 
             if (_logger.IsWarn)
                 _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: MissingTrieNode {ex.Hash} — skipping (state divergence)");
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            // XDC GasBailout: index out of range during tx processing — caused by accumulated
+            // state divergence affecting internal receipt/tx index tracking.
+            try { receiptsTracer.EndTxTrace(); } catch { /* ignore */ }
+
+            if (_logger.IsWarn)
+                _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: {ex.GetType().Name} {ex.Message.Split('\n')[0]} — skipping");
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            // XDC GasBailout: catch-all for any other execution exceptions caused by state divergence.
+            // Without this, a single failing tx blocks all subsequent blocks.
+            try { receiptsTracer.EndTxTrace(); } catch { /* ignore */ }
+
+            if (_logger.IsWarn)
+                _logger.Warn($"[XDC-GasBailout] Block {block.Number} tx[{index}] {currentTx.Hash}: {ex.GetType().Name} {ex.Message.Split('\n')[0]} — skipping (catch-all)");
         }
     }
 
