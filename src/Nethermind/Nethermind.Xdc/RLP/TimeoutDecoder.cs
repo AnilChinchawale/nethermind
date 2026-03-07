@@ -4,6 +4,7 @@
 using Nethermind.Core.Crypto;
 using Nethermind.Serialization.Rlp;
 using Nethermind.Xdc.Types;
+using System;
 
 namespace Nethermind.Xdc.RLP;
 
@@ -52,9 +53,7 @@ public sealed class TimeoutDecoder : RlpValueDecoder<Timeout>
         ulong gapNumber = rlpStream.DecodeUlong();
 
         if ((rlpBehaviors & RlpBehaviors.AllowExtraBytes) != RlpBehaviors.AllowExtraBytes)
-        {
             rlpStream.Check(endPosition);
-        }
 
         return new Timeout(round, signature, gapNumber);
     }

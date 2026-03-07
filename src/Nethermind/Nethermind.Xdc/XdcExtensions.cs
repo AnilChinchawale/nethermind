@@ -12,17 +12,17 @@ using System;
 using System.Collections.Immutable;
 
 namespace Nethermind.Xdc;
-public static class XdcExtensions
+
+internal static partial class XdcExtensions
 {
     //TODO can we wire up this so we can use Rlp.Encode()?
-    private static XdcHeaderDecoder _headerDecoder = new();
-    private static VoteDecoder _voteDecoder = new();
+    private static readonly XdcHeaderDecoder _headerDecoder = new();
+    private static readonly VoteDecoder _voteDecoder = new();
     public static Signature Sign(this IEthereumEcdsa ecdsa, PrivateKey privateKey, XdcBlockHeader header)
     {
         ValueHash256 hash = ValueKeccak.Compute(_headerDecoder.Encode(header, RlpBehaviors.ForSealing).Bytes);
         return ecdsa.Sign(privateKey, in hash);
     }
-
     public static Address RecoverVoteSigner(this IEthereumEcdsa ecdsa, Vote vote)
     {
         KeccakRlpStream stream = new();
@@ -35,6 +35,15 @@ public static class XdcExtensions
     public static IXdcReleaseSpec GetXdcSpec(this ISpecProvider specProvider, XdcBlockHeader xdcBlockHeader, ulong round = 0)
     {
         IXdcReleaseSpec spec = specProvider.GetSpec(xdcBlockHeader) as IXdcReleaseSpec;
+        if (spec is null)
+            throw new InvalidOperationException($"Expected {nameof(IXdcReleaseSpec)}.");
+        spec.ApplyV2Config(round);
+        return spec;
+    }
+
+    public static IXdcReleaseSpec GetXdcSpec(this ISpecProvider specProvider, long blockNumber, ulong round = 0)
+    {
+        IXdcReleaseSpec spec = specProvider.GetSpec(blockNumber, null) as IXdcReleaseSpec;
         if (spec is null)
             throw new InvalidOperationException($"Expected {nameof(IXdcReleaseSpec)}.");
         spec.ApplyV2Config(round);
@@ -61,7 +70,7 @@ public static class XdcExtensions
 
     public static Signature DecodeSignature(this ref Rlp.ValueDecoderContext decoderContext)
     {
-        // Includes the list prefix (2 bytes for a 65-byte signature)
+        //includes the list prefix, which is 2 bytes for a 65 byte signature
         ReadOnlySpan<byte> sigBytes = decoderContext.PeekNextItem();
         if (sigBytes.Length != Signature.Size + 2)
             throw new RlpException($"Invalid signature length in '{nameof(Vote)}'");
@@ -72,7 +81,7 @@ public static class XdcExtensions
 
     public static Signature DecodeSignature(this RlpStream stream)
     {
-        // Includes the list prefix (2 bytes for a 65-byte signature)
+        //includes the list prefix, which is 2 bytes for a 65 byte signature
         ReadOnlySpan<byte> sigBytes = stream.PeekNextItem();
         if (sigBytes.Length != Signature.Size + 2)
             throw new RlpException($"Invalid signature length in '{nameof(Vote)}'");

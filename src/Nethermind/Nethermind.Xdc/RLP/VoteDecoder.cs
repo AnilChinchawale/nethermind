@@ -5,6 +5,7 @@ using Nethermind.Core.Crypto;
 using Nethermind.Serialization.Rlp;
 using Nethermind.Xdc.RLP;
 using Nethermind.Xdc.Types;
+using System;
 
 namespace Nethermind.Xdc;
 public sealed class VoteDecoder : RlpValueDecoder<Vote>
@@ -80,7 +81,7 @@ public sealed class VoteDecoder : RlpValueDecoder<Vote>
         return new Rlp(rlpStream.Data.ToArray());
     }
 
-    public override int GetLength(Vote item, RlpBehaviors rlpBehaviors)
+    public override int GetLength(Vote item, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
     {
         return Rlp.LengthOfSequence(GetContentLength(item, rlpBehaviors));
     }
