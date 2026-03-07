@@ -57,14 +57,42 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
         blockHeader.MixHash = decoderContext.DecodeKeccak();
         blockHeader.Nonce = (ulong)decoderContext.DecodeUInt256(NonceLength);
 
-        blockHeader.Validators = decoderContext.DecodeByteArray();
-        if ((rlpBehaviors & RlpBehaviors.ForSealing) != RlpBehaviors.ForSealing)
+        // Check if we've reached the end of the header (15-field V1 format)
+        if (decoderContext.Position == headerCheck)
         {
-            blockHeader.Validator = decoderContext.DecodeByteArray();
+            // Standard geth 15-field RLP (mainnet V1 blocks).
+            // ExtraData = vanity(32) + sig(65).
+            blockHeader.IsV1Block = true;
+            blockHeader.Validators = Array.Empty<byte>();
+            blockHeader.Penalties = Array.Empty<byte>();
         }
-        blockHeader.Penalties = decoderContext.DecodeByteArray();
+        else
+        {
+            // 18-field RLP: Validators, Validator, Penalties (+ optional BaseFee)
+            // Note: Apothem uses 18-field format for ALL blocks (V1 has empty fields)
+            blockHeader.Has18FieldRlp = true;
+            blockHeader.Validators = decoderContext.DecodeByteArray();
+            if ((rlpBehaviors & RlpBehaviors.ForSealing) != RlpBehaviors.ForSealing)
+            {
+                blockHeader.Validator = decoderContext.DecodeByteArray();
+            }
+            blockHeader.Penalties = decoderContext.DecodeByteArray();
 
-        if (decoderContext.Position != headerCheck) blockHeader.BaseFeePerGas = decoderContext.DecodeUInt256();
+            // Detect V1 blocks in 18-field format: Validators and Validator are empty
+            // V2 blocks MUST have non-empty Validator (signer's signature)
+            // V1 blocks have signature in ExtraData, not Validator field
+            if ((blockHeader.Validators is null || blockHeader.Validators.Length == 0) &&
+                (blockHeader.Validator is null || blockHeader.Validator.Length == 0))
+            {
+                blockHeader.IsV1Block = true;
+            }
+
+            // Optional tail: BaseFeePerGas exists if there are remaining bytes
+            if (decoderContext.Position != headerCheck)
+            {
+                blockHeader.BaseFeePerGas = decoderContext.DecodeUInt256();
+            }
+        }
 
         if ((rlpBehaviors & RlpBehaviors.AllowExtraBytes) != RlpBehaviors.AllowExtraBytes)
         {
@@ -121,14 +149,37 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
         blockHeader.MixHash = rlpStream.DecodeKeccak();
         blockHeader.Nonce = (ulong)rlpStream.DecodeUInt256(NonceLength);
 
-        blockHeader.Validators = rlpStream.DecodeByteArray();
-        if ((rlpBehaviors & RlpBehaviors.ForSealing) != RlpBehaviors.ForSealing)
+        // Check if we've reached the end of the header (15-field V1 format)
+        if (rlpStream.Position == headerCheck)
         {
-            blockHeader.Validator = rlpStream.DecodeByteArray();
+            // Standard geth 15-field RLP (mainnet V1 blocks).
+            blockHeader.IsV1Block = true;
+            blockHeader.Validators = Array.Empty<byte>();
+            blockHeader.Penalties = Array.Empty<byte>();
         }
-        blockHeader.Penalties = rlpStream.DecodeByteArray();
+        else
+        {
+            // 18-field RLP
+            blockHeader.Has18FieldRlp = true;
+            blockHeader.Validators = rlpStream.DecodeByteArray();
+            if ((rlpBehaviors & RlpBehaviors.ForSealing) != RlpBehaviors.ForSealing)
+            {
+                blockHeader.Validator = rlpStream.DecodeByteArray();
+            }
+            blockHeader.Penalties = rlpStream.DecodeByteArray();
 
-        if (rlpStream.Position != headerCheck) blockHeader.BaseFeePerGas = rlpStream.DecodeUInt256();
+            // Detect V1 blocks in 18-field format
+            if ((blockHeader.Validators is null || blockHeader.Validators.Length == 0) &&
+                (blockHeader.Validator is null || blockHeader.Validator.Length == 0))
+            {
+                blockHeader.IsV1Block = true;
+            }
+
+            if (rlpStream.Position != headerCheck)
+            {
+                blockHeader.BaseFeePerGas = rlpStream.DecodeUInt256();
+            }
+        }
 
         if ((rlpBehaviors & RlpBehaviors.AllowExtraBytes) != RlpBehaviors.AllowExtraBytes)
         {
@@ -157,6 +208,8 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
             Nonce = src.Nonce,
             BaseFeePerGas = src.BaseFeePerGas,
             Hash = src.Hash,
+            IsV1Block = src is XdcBlockHeader xh ? xh.IsV1Block : false,
+            Has18FieldRlp = src is XdcBlockHeader xh2 ? xh2.Has18FieldRlp : false,
         };
 
     public void Encode(RlpStream rlpStream, BlockHeader? header, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
@@ -171,6 +224,13 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
         // empty validator fields so we always write the 18-field XDC format on the wire.
         if (header is not XdcBlockHeader h)
             h = AsXdcHeader(header);
+
+        // For true V1 blocks (15-field format), encode without XDC-specific fields
+        if (h.IsV1Block && !h.Has18FieldRlp)
+        {
+            EncodeV1(rlpStream, h, rlpBehaviors);
+            return;
+        }
 
         bool notForSealing = (rlpBehaviors & RlpBehaviors.ForSealing) != RlpBehaviors.ForSealing;
         rlpStream.StartSequence(GetContentLength(h, rlpBehaviors));
@@ -197,7 +257,29 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
         rlpStream.Encode(h.Penalties ?? Array.Empty<byte>());
 
         if (!h.BaseFeePerGas.IsZero) rlpStream.Encode(h.BaseFeePerGas);
+    }
 
+    private void EncodeV1(RlpStream rlpStream, XdcBlockHeader h, RlpBehaviors rlpBehaviors)
+    {
+        // V1 format: 15 fields only (standard Ethereum header fields)
+        rlpStream.StartSequence(GetV1ContentLength(h, rlpBehaviors));
+        rlpStream.Encode(h.ParentHash);
+        rlpStream.Encode(h.UnclesHash);
+        rlpStream.Encode(h.Beneficiary);
+        rlpStream.Encode(h.StateRoot);
+        rlpStream.Encode(h.TxRoot);
+        rlpStream.Encode(h.ReceiptsRoot);
+        rlpStream.Encode(h.Bloom);
+        rlpStream.Encode(h.Difficulty);
+        rlpStream.Encode(h.Number);
+        rlpStream.Encode(h.GasLimit);
+        rlpStream.Encode(h.GasUsed);
+        rlpStream.Encode(h.Timestamp);
+        rlpStream.Encode(h.ExtraData);
+        rlpStream.Encode(h.MixHash);
+        rlpStream.Encode(h.Nonce, NonceLength);
+
+        if (!h.BaseFeePerGas.IsZero) rlpStream.Encode(h.BaseFeePerGas);
     }
 
     public Rlp Encode(BlockHeader? item, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
@@ -220,6 +302,12 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
         if (item is null)
         {
             return 0;
+        }
+
+        // For true V1 blocks (15-field format)
+        if (item.IsV1Block && !item.Has18FieldRlp)
+        {
+            return GetV1ContentLength(item, rlpBehaviors);
         }
 
         bool notForSealing = (rlpBehaviors & RlpBehaviors.ForSealing) != RlpBehaviors.ForSealing;
@@ -251,6 +339,34 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
         return contentLength;
     }
 
+    private static int GetV1ContentLength(XdcBlockHeader? item, RlpBehaviors rlpBehaviors)
+    {
+        if (item is null)
+        {
+            return 0;
+        }
+
+        int contentLength = 0
+                            + Rlp.LengthOf(item.ParentHash)
+                            + Rlp.LengthOf(item.UnclesHash)
+                            + Rlp.LengthOf(item.Beneficiary)
+                            + Rlp.LengthOf(item.StateRoot)
+                            + Rlp.LengthOf(item.TxRoot)
+                            + Rlp.LengthOf(item.ReceiptsRoot)
+                            + Rlp.LengthOf(item.Bloom)
+                            + Rlp.LengthOf(item.Difficulty)
+                            + Rlp.LengthOf(item.Number)
+                            + Rlp.LengthOf(item.GasLimit)
+                            + Rlp.LengthOf(item.GasUsed)
+                            + Rlp.LengthOf(item.Timestamp)
+                            + Rlp.LengthOf(item.ExtraData)
+                            + Rlp.LengthOf(item.MixHash)
+                            + Rlp.LengthOfNonce(item.Nonce);
+
+        if (!item.BaseFeePerGas.IsZero) contentLength += Rlp.LengthOf(item.BaseFeePerGas);
+        return contentLength;
+    }
+
     public int GetLength(BlockHeader? item, RlpBehaviors rlpBehaviors)
     {
         if (item is null) return Rlp.LengthOfSequence(0);
@@ -260,4 +376,3 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
         return Rlp.LengthOfSequence(GetContentLength(header, rlpBehaviors));
     }
 }
-

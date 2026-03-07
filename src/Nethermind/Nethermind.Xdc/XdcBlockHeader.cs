@@ -12,9 +12,10 @@ using System;
 using System.Collections.Immutable;
 
 namespace Nethermind.Xdc;
+
 public class XdcBlockHeader : BlockHeader, IHashResolver
 {
-    private static XdcHeaderDecoder _headerDecoder = new();
+    private static readonly XdcHeaderDecoder _headerDecoder = new();
     private static readonly ExtraConsensusDataDecoder _extraConsensusDataDecoder = new();
     public XdcBlockHeader(
         Hash256 parentHash,
@@ -29,6 +30,18 @@ public class XdcBlockHeader : BlockHeader, IHashResolver
     {
     }
 
+    /// <summary>
+    /// True if this header was decoded from a 15-field V1 RLP (pre-XDPoS-V2 format).
+    /// In this case, the signer signature is in ExtraData[^65..] and seal hash uses ExtraData[..^65].
+    /// </summary>
+    public bool IsV1Block { get; set; }
+    /// <summary>
+    /// True when the block was decoded from 18-field RLP (Apothem format).
+    /// Even V1 blocks on Apothem use 18 fields with empty Validators/Validator/Penalties.
+    /// This flag ensures the encoder produces the same RLP for correct hash computation.
+    /// </summary>
+    public bool Has18FieldRlp { get; set; }
+
     public byte[]? Validators { get; set; }
 
     private ImmutableArray<Address>? _validatorsAddress;
@@ -38,7 +51,7 @@ public class XdcBlockHeader : BlockHeader, IHashResolver
         {
             if (_validatorsAddress is not null)
                 return _validatorsAddress;
-            _validatorsAddress = XdcExtensions.ExtractAddresses(Validators);
+            _validatorsAddress = XdcExtensions.ExtractAddresses(Validators)?.ToImmutableArray();
             return _validatorsAddress;
         }
         set { _validatorsAddress = value; }
@@ -53,7 +66,7 @@ public class XdcBlockHeader : BlockHeader, IHashResolver
         {
             if (_penaltiesAddress is not null)
                 return _penaltiesAddress;
-            _penaltiesAddress = XdcExtensions.ExtractAddresses(Penalties);
+            _penaltiesAddress = XdcExtensions.ExtractAddresses(Penalties)?.ToImmutableArray();
             return _penaltiesAddress;
         }
         set { _penaltiesAddress = value; }
@@ -85,7 +98,7 @@ public class XdcBlockHeader : BlockHeader, IHashResolver
         set { _extraFieldsV2 = value; }
     }
 
-    public ValueHash256 CalculateHash()
+    public virtual ValueHash256 CalculateHash()
     {
         KeccakRlpStream rlpStream = new KeccakRlpStream();
         _headerDecoder.Encode(rlpStream, this);
@@ -120,10 +133,6 @@ public class XdcBlockHeader : BlockHeader, IHashResolver
             ParentBeaconBlockRoot = src.ParentBeaconBlockRoot,
             ExcessBlobGas = src.ExcessBlobGas,
             BlobGasUsed = src.BlobGasUsed,
-            // XDC fields: empty byte arrays encode as 0x80 in RLP (matching geth-xdc)
-            Validator = Array.Empty<byte>(),
-            Validators = Array.Empty<byte>(),
-            Penalties = Array.Empty<byte>(),
         };
 
         return x;

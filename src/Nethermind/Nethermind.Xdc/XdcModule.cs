@@ -204,6 +204,19 @@ public class XdcModule : Module
                 consensusProcessor);
         }).As<ICustomEthProtocolFactory>()
           .SingleInstance();
+
+        // Override BlockHeadersMessage serializers to inject XdcHeaderDecoder
+        // Default NetworkModule registers these WITHOUT IHeaderDecoder → fallback to standard HeaderDecoder
+        // which cannot decode XDC 18-field headers → V1 block 1 fails "Validator field required"
+        builder.Register(ctx =>
+                new Network.P2P.Subprotocols.Eth.V62.Messages.BlockHeadersMessageSerializer(ctx.Resolve<IHeaderDecoder>()))
+            .As<IZeroMessageSerializer<Network.P2P.Subprotocols.Eth.V62.Messages.BlockHeadersMessage>>()
+            .SingleInstance();
+
+        builder.Register(ctx =>
+                new Network.P2P.Subprotocols.Eth.V66.Messages.BlockHeadersMessageSerializer(ctx.Resolve<IHeaderDecoder>()))
+            .As<IZeroMessageSerializer<Network.P2P.Subprotocols.Eth.V66.Messages.BlockHeadersMessage>>()
+            .SingleInstance();
     }
 }
 

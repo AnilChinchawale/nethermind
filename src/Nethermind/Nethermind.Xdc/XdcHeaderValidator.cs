@@ -38,4 +38,24 @@ internal class XdcHeaderValidator : HeaderValidator
         // XDPoS consensus allows validators to set gas limit freely
         return true;
     }
+
+    /// <summary>
+    /// Allow variable difficulty for V1 blocks (clique-style consensus).
+    /// V1 blocks use difficulty values like 1 (no-turn) or 2 (in-turn).
+    /// V2 blocks always have difficulty 1.
+    /// </summary>
+    protected override bool ValidateTotalDifficulty(BlockHeader header, BlockHeader parent, ref string? error)
+    {
+        // V1 blocks use clique-style difficulty (variable)
+        // V2 blocks always have difficulty 1
+        // Skip strict difficulty check for V1 blocks
+        if (header is XdcBlockHeader xdcH && xdcH.IsV1Block)
+        {
+            // V1 blocks can have variable difficulty - don't validate strictly
+            return true;
+        }
+        
+        // For V2 blocks, validate normally (difficulty should be 1)
+        return base.ValidateTotalDifficulty(header, parent, ref error);
+    }
 }
