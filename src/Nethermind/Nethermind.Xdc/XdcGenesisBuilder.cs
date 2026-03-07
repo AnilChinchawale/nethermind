@@ -37,6 +37,11 @@ public class XdcGenesisBuilder(
         // geth genesis has empty Validators/Validator/Penalties (default zero values in Go struct)
         if (genesis.Header is XdcBlockHeader xdcHeader)
         {
+            // CRITICAL: Genesis must use 15-field encoding (standard) NOT 18-field XDC encoding
+            // to match geth's genesis hash. Set IsV1Block=true and Has18FieldRlp=false.
+            xdcHeader.IsV1Block = true;
+            xdcHeader.Has18FieldRlp = false;
+            
             // In Go, unset []byte fields are nil, which RLP-encodes as empty string (0x80)
             // We need to match this exactly
             xdcHeader.Validators ??= Array.Empty<byte>();
