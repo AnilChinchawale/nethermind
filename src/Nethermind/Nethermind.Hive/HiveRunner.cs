@@ -69,7 +69,7 @@ namespace Nethermind.Hive
             // #  - HIVE_TESTNET        whether testnet nonces (2^20) are needed
             // #  - HIVE_NODETYPE       sync and pruning selector (archive, full, light)
             // #  - HIVE_FORK_HOMESTEAD block number of the DAO hard-fork transition
-            // #  - HIVE_FORK_DAO_BLOCK block number of the DAO hard-fork transitionnsition
+            // #  - HIVE_FORK_DAO_BLOCK block number of the DAO hard-fork transition
             // #  - HIVE_FORK_DAO_VOTE  whether the node support (or opposes) the DAO fork
             // #  - HIVE_FORK_TANGERINE block number of TangerineWhistle
             // #  - HIVE_FORK_SPURIOUS  block number of SpuriousDragon
@@ -143,14 +143,14 @@ namespace Nethermind.Hive
             }
 
             byte[] chainFileContent = fileSystem.File.ReadAllBytes(chainFile);
-            RlpStream rlpStream = new RlpStream(chainFileContent);
+            Rlp.ValueDecoderContext rlpContext = new(chainFileContent);
             List<Block> blocks = new List<Block>();
 
             if (_logger.IsInfo) _logger.Info($"HIVE Loading blocks from {chainFile}");
-            while (rlpStream.PeekNumberOfItemsRemaining() > 0)
+            while (rlpContext.PeekNumberOfItemsRemaining() > 0)
             {
-                rlpStream.PeekNextItem();
-                Block block = Rlp.Decode<Block>(rlpStream, RlpBehaviors.AllowExtraBytes);
+                rlpContext.PeekNextItem();
+                Block block = Rlp.Decode<Block>(ref rlpContext, RlpBehaviors.AllowExtraBytes);
                 if (_logger.IsInfo)
                     _logger.Info($"HIVE Reading a chain.rlp block {block.ToString(Block.Format.Short)}");
                 blocks.Add(block);
@@ -185,7 +185,7 @@ namespace Nethermind.Hive
         {
             if (!await semaphore.WaitAsync(5000))
             {
-                throw new InvalidOperationException();
+                throw new InvalidOperationException("Block processing timeout after 5000ms. The block may not have been processed in time.");
             }
         }
 

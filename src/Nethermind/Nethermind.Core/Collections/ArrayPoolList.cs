@@ -8,7 +8,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Threading;
 
 namespace Nethermind.Core.Collections;
 
@@ -20,9 +19,9 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
     private bool _disposed;
     private int _count = 0;
 
-    public ArrayPoolList(int capacity) : this(ArrayPool<T>.Shared, capacity) { }
+    public ArrayPoolList(int capacity) : this(SafeArrayPool<T>.Shared, capacity) { }
 
-    public ArrayPoolList(int capacity, int count) : this(ArrayPool<T>.Shared, capacity, count) { }
+    public ArrayPoolList(int capacity, int count) : this(SafeArrayPool<T>.Shared, capacity, count) { }
 
     public ArrayPoolList(int capacity, IEnumerable<T> enumerable) : this(capacity) => this.AddRange(enumerable);
 
@@ -79,7 +78,7 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
     public void Add(T item)
     {
         GuardDispose();
-        ArrayPoolListCore.Add(_arrayPool, ref _array, ref _capacity, ref _count, item);
+        ArrayPoolListCore<T>.Add(_arrayPool, ref _array, ref _capacity, ref _count, item);
     }
 
     int IList.Add(object? value)
@@ -94,19 +93,19 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
     public void AddRange(params ReadOnlySpan<T> items)
     {
         GuardDispose();
-        ArrayPoolListCore.AddRange(_arrayPool, ref _array, ref _capacity, ref _count, items);
+        ArrayPoolListCore<T>.AddRange(_arrayPool, ref _array, ref _capacity, ref _count, items);
     }
 
     public void Clear()
     {
         GuardDispose();
-        ArrayPoolListCore.Clear(_array, ref _count);
+        ArrayPoolListCore<T>.Clear(_array, ref _count);
     }
 
     public bool Contains(T item)
     {
         GuardDispose();
-        return ArrayPoolListCore.Contains(_array, item, _count);
+        return ArrayPoolListCore<T>.Contains(_array, item, _count);
     }
 
     bool IList.Contains(object? value) => IsCompatibleObject(value) && Contains((T)value!);
@@ -114,7 +113,7 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
     public void CopyTo(T[] array, int arrayIndex)
     {
         GuardDispose();
-        ArrayPoolListCore.CopyTo(_array, _count, array, arrayIndex);
+        ArrayPoolListCore<T>.CopyTo(_array, _count, array, arrayIndex);
     }
 
     void ICollection.CopyTo(Array? array, int index)
@@ -137,13 +136,13 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
     public void ReduceCount(int count)
     {
         GuardDispose();
-        ArrayPoolListCore.ReduceCount(_arrayPool, ref _array, ref _capacity, ref _count, count);
+        ArrayPoolListCore<T>.ReduceCount(_arrayPool, ref _array, ref _capacity, ref _count, count);
     }
 
     public void Sort(Comparison<T> comparison)
     {
         GuardDispose();
-        ArrayPoolListCore.Sort(_array, _count, comparison);
+        ArrayPoolListCore<T>.Sort(_array, _count, comparison);
     }
 
     public int Capacity => _capacity;
@@ -161,7 +160,7 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
     public int IndexOf(T item)
     {
         GuardDispose();
-        return ArrayPoolListCore.IndexOf(_array, _count, item);
+        return ArrayPoolListCore<T>.IndexOf(_array, _count, item);
     }
 
     int IList.IndexOf(object? value) => IsCompatibleObject(value) ? IndexOf((T)value!) : -1;
@@ -169,7 +168,7 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
     public void Insert(int index, T item)
     {
         GuardDispose();
-        ArrayPoolListCore.Insert(_arrayPool, ref _array, ref _capacity, ref _count, index, item);
+        ArrayPoolListCore<T>.Insert(_arrayPool, ref _array, ref _capacity, ref _count, index, item);
     }
 
     void IList.Insert(int index, object? value)
@@ -182,7 +181,7 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
     public bool Remove(T item)
     {
         GuardDispose();
-        return ArrayPoolListCore.Remove(_array, ref _count, item);
+        return ArrayPoolListCore<T>.Remove(_array, ref _count, item);
     }
 
     void IList.Remove(object? value)
@@ -194,19 +193,19 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
     public void RemoveAt(int index)
     {
         GuardDispose();
-        ArrayPoolListCore.RemoveAt(_array, ref _count, index, true);
+        ArrayPoolListCore<T>.RemoveAt(_array, ref _count, index, true);
     }
 
     public void Truncate(int newLength)
     {
         GuardDispose();
-        ArrayPoolListCore.Truncate(newLength, _array, ref _count);
+        ArrayPoolListCore<T>.Truncate(newLength, _array, ref _count);
     }
 
     public ref T GetRef(int index)
     {
         GuardDispose();
-        return ref ArrayPoolListCore.GetRef(_array, index, _count);
+        return ref ArrayPoolListCore<T>.GetRef(_array, index, _count);
     }
 
     public T this[int index]
@@ -214,12 +213,12 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
         get
         {
             GuardDispose();
-            return ArrayPoolListCore.Get(_array, index, _count);
+            return ArrayPoolListCore<T>.Get(_array, index, _count);
         }
         set
         {
             GuardDispose();
-            ArrayPoolListCore.Set(_array, index, _count, value);
+            ArrayPoolListCore<T>.Set(_array, index, _count, value);
         }
     }
 
@@ -240,10 +239,10 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
 
     public void Dispose()
     {
-        ArrayPoolListCore.Dispose(_arrayPool, ref _array, ref _count, ref _capacity, ref _disposed);
+        ArrayPoolListCore<T>.Dispose(_arrayPool, ref _array, ref _count, ref _capacity, ref _disposed);
 
 #if DEBUG
-    GC.SuppressFinalize(this);
+        GC.SuppressFinalize(this);
 #endif
     }
 
@@ -282,6 +281,6 @@ public sealed class ArrayPoolList<T> : IList<T>, IList, IOwnedReadOnlyList<T>
     public void Reverse()
     {
         GuardDispose();
-        ArrayPoolListCore.Reverse(_array, _count);
+        ArrayPoolListCore<T>.Reverse(_array, _count);
     }
 }

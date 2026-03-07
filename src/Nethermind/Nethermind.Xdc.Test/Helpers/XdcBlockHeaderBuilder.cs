@@ -10,7 +10,6 @@ using Nethermind.Xdc.Types;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection.PortableExecutable;
 
 namespace Nethermind.Core.Test.Builders;
 
@@ -29,7 +28,7 @@ public class XdcBlockHeaderBuilder : BlockHeaderBuilder
             Address.Zero,
             UInt256.One,
             1,
-            XdcConstants.TargetGasLimit,
+            XdcConstants.DefaultTargetGasLimit,
             1_700_000_000,
             [])
         {

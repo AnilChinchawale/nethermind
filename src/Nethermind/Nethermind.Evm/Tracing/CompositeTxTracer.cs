@@ -313,7 +313,7 @@ public class CompositeTxTracer : ITxTracer
         for (int index = 0; index < _txTracers.Count; index++)
         {
             ITxTracer innerTracer = _txTracers[index];
-            if (innerTracer.IsTracingInstructions)
+            if (innerTracer.IsTracingStorage)
             {
                 innerTracer.ReportStorageChange(key, value);
             }
@@ -340,6 +340,30 @@ public class CompositeTxTracer : ITxTracer
             if (innerTracer.IsTracingOpLevelStorage)
             {
                 innerTracer.LoadOperationStorage(address, storageIndex, value);
+            }
+        }
+    }
+
+    public void SetOperationTransientStorage(Address address, UInt256 storageIndex, ReadOnlySpan<byte> newValue, ReadOnlySpan<byte> currentValue)
+    {
+        for (int index = 0; index < _txTracers.Count; index++)
+        {
+            ITxTracer innerTracer = _txTracers[index];
+            if (innerTracer.IsTracingOpLevelStorage)
+            {
+                innerTracer.SetOperationTransientStorage(address, storageIndex, newValue, currentValue);
+            }
+        }
+    }
+
+    public void LoadOperationTransientStorage(Address address, UInt256 storageIndex, ReadOnlySpan<byte> value)
+    {
+        for (int index = 0; index < _txTracers.Count; index++)
+        {
+            ITxTracer innerTracer = _txTracers[index];
+            if (innerTracer.IsTracingOpLevelStorage)
+            {
+                innerTracer.LoadOperationTransientStorage(address, storageIndex, value);
             }
         }
     }

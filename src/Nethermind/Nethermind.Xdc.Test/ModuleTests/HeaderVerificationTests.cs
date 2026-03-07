@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using Autofac;
-using Google.Protobuf.WellKnownTypes;
 using Nethermind.Consensus;
 using Nethermind.Consensus.Validators;
 using Nethermind.Core;
@@ -10,23 +9,19 @@ using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
 using Nethermind.Core.Test.Builders;
 using Nethermind.Crypto;
-using Nethermind.Logging;
 using Nethermind.Serialization.Rlp;
 using Nethermind.Xdc.RLP;
-using Nethermind.Xdc.Spec;
 using Nethermind.Xdc.Test.Helpers;
 using Nethermind.Xdc.Types;
-using NSubstitute.ExceptionExtensions;
 using NUnit.Framework;
-using Org.BouncyCastle.Crypto;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using ISigner = Nethermind.Consensus.ISigner;
 
 namespace Nethermind.Xdc.Test.ModuleTests;
+
 internal class HeaderVerificationTests
 {
     private XdcTestBlockchain xdcTestBlockchain;
@@ -43,6 +38,12 @@ internal class HeaderVerificationTests
         extraConsensusDataDecoder = new();
     }
 
+    [TearDown]
+    public void TearDown()
+    {
+        xdcTestBlockchain?.Dispose();
+    }
+
     [Test]
     public void Block_With_Invalid_Qc_Fails()
     {
@@ -56,8 +57,8 @@ internal class HeaderVerificationTests
         var voteForSign = new Vote(proposedBlockInfo, 1);
 
         var validSigners = xdcTestBlockchain.MasterNodeCandidates
-            .Where(pvkey => invalidRoundBlockParent.ValidatorsAddress!.Value.Contains(pvkey.Address))
-            .Select(pvkey => new Signer(0, pvkey, xdcTestBlockchain.LogManager))
+            .Where(pvKey => invalidRoundBlockParent.ValidatorsAddress!.Value.Contains(pvKey.Address))
+            .Select(pvKey => new Signer(0, pvKey, xdcTestBlockchain.LogManager))
             .ToList();
 
         List<Signature> signatures = [];
@@ -78,7 +79,7 @@ internal class HeaderVerificationTests
     }
 
     [Test]
-    public async Task Block_With_Illigitimate_Signer_Fails()
+    public async Task Block_With_Illegitimate_Signer_Fails()
     {
         var previousSigner = xdcSigner.Key;
 
@@ -260,12 +261,12 @@ internal class HeaderVerificationTests
         var proposedBlockInfo = new BlockRoundInfo(invalidQcSignatureBlockParent!.Hash!, invalidQcSignatureBlockParent.ExtraConsensusData!.BlockRound, invalidQcSignatureBlockParent.Number);
         var voteForSign = new Vote(proposedBlockInfo, 1);
         var validSigners = xdcTestBlockchain.MasterNodeCandidates
-            .Where(pvkey => invalidQcSignatureBlockParent.ValidatorsAddress!.Value.Contains(pvkey.Address))
-            .Select(pvkey => new Signer(0, pvkey, xdcTestBlockchain.LogManager))
+            .Where(pvKey => invalidQcSignatureBlockParent.ValidatorsAddress!.Value.Contains(pvKey.Address))
+            .Select(pvKey => new Signer(0, pvKey, xdcTestBlockchain.LogManager))
             .ToList();
         List<Signature> signatures = [];
 
-        double threshold = xdcTestBlockchain.SpecProvider.GetXdcSpec(invalidQcSignatureBlock).CertThreshold;
+        double threshold = xdcTestBlockchain.SpecProvider.GetXdcSpec(invalidQcSignatureBlock).CertificateThreshold;
 
         // Sign with only half of the valid signers to be below threshold
         foreach (var signer in validSigners.Take((int)threshold - 1))

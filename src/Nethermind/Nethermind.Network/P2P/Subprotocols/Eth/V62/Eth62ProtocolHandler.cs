@@ -183,9 +183,7 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V62
                 case Eth62MessageCode.NewBlock:
                     if (CanAcceptBlockGossip())
                     {
-                        using NewBlockMessage newBlockMsg = Deserialize<NewBlockMessage>(message.Content);
-                        ReportIn(newBlockMsg, size);
-                        Handle(newBlockMsg);
+                        HandleInBackground<NewBlockMessage>(message, Handle);
                     }
                     break;
             }
@@ -236,7 +234,7 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V62
         protected void Handle(TransactionsMessage msg)
         {
             IOwnedReadOnlyList<Transaction> iList = msg.Transactions;
-            BackgroundTaskScheduler.ScheduleBackgroundTask((iList, 0), _handleSlow);
+            BackgroundTaskScheduler.TryScheduleBackgroundTask((iList, 0), _handleSlow);
         }
 
         protected virtual ValueTask HandleSlow((IOwnedReadOnlyList<Transaction> txs, int startIndex) request, CancellationToken cancellationToken)
@@ -262,7 +260,7 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V62
                         }
 
                         // Reschedule and with different start index
-                        BackgroundTaskScheduler.ScheduleBackgroundTask((transactions, i), HandleSlow);
+                        BackgroundTaskScheduler.TryScheduleBackgroundTask((transactions, i), HandleSlow);
                         return ValueTask.CompletedTask;
                     }
 
@@ -309,7 +307,7 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V62
             }
         }
 
-        private void Handle(NewBlockMessage msg)
+        private ValueTask Handle(NewBlockMessage msg, CancellationToken cancellationToken)
         {
             try
             {
@@ -321,6 +319,8 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V62
                 if (Logger.IsDebug) Logger.Debug($"Handling {msg} from {Node:c} failed: " + e.Message);
                 throw;
             }
+
+            return ValueTask.CompletedTask;
         }
 
         protected virtual void NotifyOfStatus(BlockHeader head)

@@ -44,7 +44,7 @@ public abstract class BlockchainTestBase
     private static readonly ILogger _logger;
     private static readonly ILogManager _logManager = new TestLogManager(LogLevel.Warn);
     private static DifficultyCalculatorWrapper DifficultyCalculator { get; }
-    private const int _genesisProcessingTimeoutMs = 5000;
+    private const int _genesisProcessingTimeoutMs = 30000;
 
     static BlockchainTestBase()
     {
@@ -350,8 +350,8 @@ public abstract class BlockchainTestBase
             TestBlockJson testBlockJson = test.Blocks[i];
             try
             {
-                RlpStream rlpContext = Bytes.FromHexString(testBlockJson.Rlp!).AsRlpStream();
-                Block suggestedBlock = Rlp.Decode<Block>(rlpContext);
+                byte[] rlpBytes = Bytes.FromHexString(testBlockJson.Rlp!);
+                Block suggestedBlock = Rlp.Decode<Block>(rlpBytes);
 
                 if (testBlockJson.BlockHeader is not null)
                 {

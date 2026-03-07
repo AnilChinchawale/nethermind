@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
 # SPDX-License-Identifier: LGPL-3.0-only
 
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:9.0.307-noble@sha256:5643129f0c9f09bab23387c57bfeea1e3e42f47c7370fd9e389a5739e5ef383c AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.103-noble@sha256:e362a8dbcd691522456da26a5198b8f3ca1d7641c95624fadc5e3e82678bd08a AS build
 
 ARG BUILD_CONFIG=release
 ARG CI=true
@@ -13,8 +13,8 @@ WORKDIR /nethermind
 
 COPY src/Nethermind src/Nethermind
 COPY Directory.*.props .
-COPY nuget.config .
 COPY global.json .
+COPY nuget.config .
 
 RUN arch=$([ "$TARGETARCH" = "amd64" ] && echo "x64" || echo "$TARGETARCH") && \
   cd src/Nethermind/Nethermind.Runner && \
@@ -25,7 +25,7 @@ RUN arch=$([ "$TARGETARCH" = "amd64" ] && echo "x64" || echo "$TARGETARCH") && \
 # A temporary symlink to support the old executable name
 RUN ln -sr /publish/nethermind /publish/Nethermind.Runner
 
-FROM mcr.microsoft.com/dotnet/aspnet:9.0.11-noble@sha256:413f5a0bc78c04a6fec41c351725913713a560405eccb2a1b4ea3ce0a065d3ed
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.3-noble@sha256:aec87aa74ddf129da573fa69f42f229a23c953a1c6fdecedea1aa6b1fe147d76
 
 WORKDIR /nethermind
 

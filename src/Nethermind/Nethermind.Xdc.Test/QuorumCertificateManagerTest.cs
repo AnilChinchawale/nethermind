@@ -7,20 +7,18 @@ using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
 using Nethermind.Core.Test.Builders;
 using Nethermind.Crypto;
-using Nethermind.Db;
 using Nethermind.Logging;
-using Nethermind.Serialization.Rlp;
+using Nethermind.Xdc.Errors;
 using Nethermind.Xdc.Spec;
 using Nethermind.Xdc.Types;
 using NSubstitute;
 using NUnit.Framework;
-using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Nethermind.Xdc.Test;
+
+[Parallelizable(ParallelScope.All)]
 public class QuorumCertificateManagerTest
 {
     [Test]
@@ -91,7 +89,7 @@ public class QuorumCertificateManagerTest
         IXdcReleaseSpec xdcReleaseSpec = Substitute.For<IXdcReleaseSpec>();
         xdcReleaseSpec.EpochLength.Returns(900);
         xdcReleaseSpec.Gap.Returns(450);
-        xdcReleaseSpec.CertThreshold.Returns(0.667);
+        xdcReleaseSpec.CertificateThreshold.Returns(0.667);
         specProvider.GetSpec(Arg.Any<ForkActivation>()).Returns(xdcReleaseSpec);
         var quorumCertificateManager = new QuorumCertificateManager(
             new XdcConsensusContext(),
@@ -119,7 +117,7 @@ public class QuorumCertificateManagerTest
             Substitute.For<ILogManager>());
         QuorumCertificate qc = Build.A.QuorumCertificate().WithBlockInfo(new BlockRoundInfo(Hash256.Zero, 1, 0)).TestObject;
 
-        Assert.That(() => quorumCertificateManager.CommitCertificate(qc), Throws.TypeOf<InvalidBlockException>());
+        Assert.That(() => quorumCertificateManager.CommitCertificate(qc), Throws.TypeOf<IncomingMessageBlockNotFoundException>());
     }
 
     [Test]

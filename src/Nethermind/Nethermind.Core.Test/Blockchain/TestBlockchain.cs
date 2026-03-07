@@ -3,14 +3,11 @@
 
 using System;
 using System.Collections.Generic;
-using System.Configuration;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Autofac;
-using FluentAssertions;
-using Nethermind.Api;
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.Find;
 using Nethermind.Blockchain.Receipts;
@@ -43,7 +40,6 @@ using Nethermind.Network;
 using Nethermind.State;
 using Nethermind.State.Repositories;
 using Nethermind.TxPool;
-using Nethermind.Blockchain.Blocks;
 using Nethermind.Init.Modules;
 
 namespace Nethermind.Core.Test.Blockchain;
@@ -51,7 +47,7 @@ namespace Nethermind.Core.Test.Blockchain;
 public class TestBlockchain : IDisposable
 {
     public const int DefaultTimeout = 10000;
-    protected long TestTimout { get; init; } = DefaultTimeout;
+    protected long TestTimeout { get; init; } = DefaultTimeout;
     public IStateReader StateReader => _fromContainer.StateReader;
     public IEthereumEcdsa EthereumEcdsa => _fromContainer.EthereumEcdsa;
     public INonceManager NonceManager => _fromContainer.NonceManager;
@@ -61,6 +57,7 @@ public class TestBlockchain : IDisposable
     public ITxPool TxPool => _fromContainer.TxPool;
     public IForkInfo ForkInfo => _fromContainer.ForkInfo;
     public IWorldStateManager WorldStateManager => _fromContainer.WorldStateManager;
+    public IWorldState MainWorldState => MainProcessingContext.WorldState;
     public IReadOnlyTxProcessingEnvFactory ReadOnlyTxProcessingEnvFactory => _fromContainer.ReadOnlyTxProcessingEnvFactory;
     public IShareableTxProcessorSource ShareableTxProcessorSource => _fromContainer.ShareableTxProcessorSource;
     public IBranchProcessor BranchProcessor => _fromContainer.MainProcessingContext.BranchProcessor;
@@ -100,7 +97,7 @@ public class TestBlockchain : IDisposable
 
     public static readonly DateTime InitialTimestamp = new(2020, 2, 15, 12, 50, 30, DateTimeKind.Utc);
 
-    public static readonly UInt256 InitialValue = 1000.Ether();
+    public static readonly UInt256 InitialValue = 1000.Ether;
 
     public CancellationToken CancellationToken => CreateCancellationSource().Token;
 
@@ -256,8 +253,8 @@ public class TestBlockchain : IDisposable
             .AddSingleton<IUnclesValidator>(Always.Valid)
             .AddSingleton<ISealer>(new NethDevSealEngine(TestItem.AddressD))
 
-            .AddSingleton<IBlockProducer>((_) => this.BlockProducer)
-            .AddSingleton<IBlockProducerRunner>((_) => this.BlockProducerRunner)
+            .AddSingleton<IBlockProducer>((_) => BlockProducer)
+            .AddSingleton<IBlockProducerRunner>((_) => BlockProducerRunner)
 
             .AddSingleton<TestBlockchainUtil.Config, Configuration>((cfg) => new TestBlockchainUtil.Config(cfg.SlotTime))
 
@@ -326,7 +323,7 @@ public class TestBlockchain : IDisposable
             // Eip2935
             if (specProvider.GenesisSpec.IsBlockHashInStateAvailable)
             {
-                state.CreateAccount(specProvider.GenesisSpec.Eip2935ContractAddress, 1);
+                state.CreateAccount(specProvider.GenesisSpec.Eip2935ContractAddress!, 1);
             }
 
             state.CreateAccount(TestItem.AddressA, testConfiguration.AccountInitialValue);
@@ -391,7 +388,7 @@ public class TestBlockchain : IDisposable
 
     protected virtual AutoCancelTokenSource CreateCancellationSource()
     {
-        return AutoCancelTokenSource.ThatCancelAfter(Debugger.IsAttached ? TimeSpan.FromMilliseconds(-1) : TimeSpan.FromMilliseconds(TestTimout));
+        return AutoCancelTokenSource.ThatCancelAfter(Debugger.IsAttached ? TimeSpan.FromMilliseconds(-1) : TimeSpan.FromMilliseconds(TestTimeout));
     }
 
     protected virtual async Task AddBlocksOnStart()
@@ -465,6 +462,11 @@ public class TestBlockchain : IDisposable
         await TestUtil.AddBlockAndWaitForHead(true, CreateCancellationSource().Token, transactions);
     }
 
+    public async Task AddBlockMayHaveExtraTx(params Transaction[] transactions)
+    {
+        await TestUtil.AddBlockMayHaveExtraTx(true, CreateCancellationSource().Token, transactions);
+    }
+
     public async Task AddBlockThroughPoW(params Transaction[] transactions)
     {
         await PoWTestUtil.AddBlockAndWaitForHead(CreateCancellationSource().Token, transactions);
@@ -524,8 +526,8 @@ public class TestBlockchain : IDisposable
             .SignedAndResolved(TestItem.PrivateKeyA)
             .To(address)
             .WithNonce(nonce + index)
-            .WithMaxFeePerGas(20.GWei())
-            .WithMaxPriorityFeePerGas(5.GWei())
+            .WithMaxFeePerGas(20.GWei)
+            .WithMaxPriorityFeePerGas(5.GWei)
             .WithType(TxType.EIP1559)
             .WithValue(ether)
             .WithChainId(MainnetSpecProvider.Instance.ChainId)

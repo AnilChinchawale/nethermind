@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
 using Nethermind.Core;
 using Nethermind.Crypto;
 using Nethermind.Evm;
@@ -20,6 +19,11 @@ public class SimulateTransactionProcessorAdapter(ITransactionProcessor transacti
         {
             transaction.GasLimit = long.Min(simulateRequestState.BlockGasLeft, simulateRequestState.TotalGasLeft);
         }
+
+        if (simulateRequestState.TotalGasLeft < transaction.GasLimit)
+        {
+            transaction.GasLimit = simulateRequestState.TotalGasLeft;
+        }
         transaction.Hash = transaction.CalculateHash();
 
         TransactionResult result = simulateRequestState.Validate ? transactionProcessor.Execute(transaction, txTracer) : transactionProcessor.Trace(transaction, txTracer);
@@ -27,6 +31,7 @@ public class SimulateTransactionProcessorAdapter(ITransactionProcessor transacti
         // Keep track of gas left
         simulateRequestState.TotalGasLeft -= transaction.SpentGas;
         simulateRequestState.BlockGasLeft -= transaction.SpentGas;
+
         _currentTxIndex++;
         return result;
     }

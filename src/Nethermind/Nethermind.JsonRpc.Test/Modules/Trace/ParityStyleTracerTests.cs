@@ -44,7 +44,7 @@ public class ParityStyleTracerTests
             .TestObject;
 
         ChainSpec cp = Build.A.ChainSpec
-            .WithAllocation(new Address("0xdea60e4f8ea50d5ed92b0a5b15ae9d24aeba0bee"), 1.Ether())
+            .WithAllocation(new Address("0xdea60e4f8ea50d5ed92b0a5b15ae9d24aeba0bee"), 1.Ether)
             .TestObject;
 
         _poSSwitcher = Substitute.For<IPoSSwitcher>();
@@ -70,7 +70,7 @@ public class ParityStyleTracerTests
     [Test]
     public void Can_trace_raw_parity_style()
     {
-        ResultWrapper<ParityTxTraceFromReplay> result = _traceRpcModule.trace_rawTransaction(Bytes.FromHexString("f889808609184e72a00082271094000000000000000000000000000000000000000080a47f74657374320000000000000000000000000000000000000000000000000000006000571ca08a8bbf888cfa37bbf0bb965423625641fc956967b81d12e23709cead01446075a01ce999b56a8a88504be365442ea61239198e23d1fce7d00fcfc5cd3b44b7215f"), new[] { "trace" });
+        ResultWrapper<ParityTxTraceFromReplay> result = _traceRpcModule.trace_rawTransaction(Bytes.FromHexString("f8838080829c4094000000000000000000000000000000000000000080a47f74657374320000000000000000000000000000000000000000000000000000006000571ca08a8bbf888cfa37bbf0bb965423625641fc956967b81d12e23709cead01446075a01ce999b56a8a88504be365442ea61239198e23d1fce7d00fcfc5cd3b44b7215f"), new[] { "trace" });
         Assert.That(result.Data, Is.Not.Null);
     }
 

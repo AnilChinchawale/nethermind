@@ -214,7 +214,7 @@ Finalization requires:
 │      ├─▶ Add to XdcPool<Vote>                      │
 │      │                                             │
 │      ├─▶ Check threshold                           │
-│      │    (votes >= masternodes * certThreshold)   │
+│      │    (votes >= masternodes * CertificateThreshold)   │
 │      │                                             │
 │      └─▶ OnVotePoolThresholdReached()              │
 │           │                                        │
@@ -389,7 +389,7 @@ Phase 4: QC AGGREGATION
 ┌────────────────────────────────┐
 │ Collect Votes in Pool          │
 │ Wait for threshold:            │
-│  votes >= nodes * certThreshold│
+│  votes >= nodes * CertificateThreshold│
 └──────────────┬─────────────────┘
                │
                ▼
@@ -728,7 +728,7 @@ Round N-2          Round N-1          Round N
    ▼                  ▼                  ▼
 ┌────────┐        ┌────────┐        ┌────────┐
 │Block B │◀───────│Block C │◀───────│Block D │
-│QC(B)   │        │QC(C)   │        │QC(D)   │
+│QC(A)   │        │QC(B)   │        │QC(C)   │
 └────────┘        └────────┘        └────────┘
     ▲
     │
@@ -806,8 +806,8 @@ Total Validators: N
 Byzantine Tolerance: f
 Honest Majority: N ≥ 3f + 1
 
-Quorum Certificate: ⌈N * certThreshold⌉ signatures
-Default: certThreshold = 2/3
+Quorum Certificate: ⌈N * CertificateThreshold⌉ signatures
+Default: CertificateThreshold = 2/3
 Minimum: 2f + 1 = ⌈2N/3⌉
 ```
 
@@ -898,7 +898,7 @@ EpochLength: 900              // Blocks per epoch
 Gap: 450                      // Snapshot before epoch end
 SwitchBlock: <configured>     // V2 activation block
 MaxMasternodes: 108          // Maximum validators
-CertThreshold: 0.67          // 2/3 quorum
+CertificateThreshold: 0.67          // 2/3 quorum
 TimeoutPeriod: 4000ms        // Round timeout
 MinePeriod: 2000ms           // Minimum block time
 TimeoutSyncThreshold: 3      // SyncInfo after N timeouts
@@ -913,14 +913,14 @@ V2ConfigParams[] {
     {
         SwitchRound: 0,
         MaxMasternodes: 108,
-        CertThreshold: 0.67,
+        CertificateThreshold: 0.67,
         TimeoutPeriod: 4000,
         MinePeriod: 2000
     },
     {
         SwitchRound: 1000000,  // Future upgrade
         MaxMasternodes: 150,
-        CertThreshold: 0.70,
+        CertificateThreshold: 0.70,
         ...
     }
 }
@@ -1133,53 +1133,6 @@ Performance:
 - Network Message Rate
 ```
 
-### Log Events
-
-```csharp
-Important log points:
-─────────────────────
-✓ Round advanced
-✓ Block proposed (with hash)
-✓ Vote cast
-✓ QC formed
-✓ Block finalized
-✓ Epoch switched
-✓ Timeout sent
-✓ TC formed
-✗ Validation failures
-✗ Fork detected
-```
-
----
-
-## Future Enhancements
-
-### 1. Pipelining
-
-Currently sequential: Propose → Vote → QC → Next Round
-
-Future: Overlap rounds for higher throughput
-
-```
-Round N:     [Propose] ──▶ [Vote] ──▶ [QC]
-Round N+1:              [Propose] ──▶ [Vote] ──▶ [QC]
-Round N+2:                         [Propose] ──▶ [Vote] ──▶ [QC]
-```
-
-### 2. Optimistic Responsiveness
-
-Fast path when all nodes agree (0 timeouts):
-- Reduce MinePeriod
-- Immediate voting
-- Faster finalization
-
-### 3. Forensics Implementation
-
-Currently stub `PenaltyHandler`:
-- Detect double signing
-- Slash malicious validators
-- Reward honest participants
-
 ---
 
 ## References
@@ -1218,13 +1171,6 @@ Currently stub `PenaltyHandler`:
 - [x] XdcBlockTree - Chain management
 - [x] XdcHeaderValidator - Header validation
 - [x] XdcSealValidator - Seal validation
-
-### TODO Components
-
-- [ ] ForensicsProcessor - Slashing logic
-- [ ] PenaltyHandler - Penalty calculation (currently stub)
-- [ ] SyncInfoManager - Advanced sync (skeleton)
-- [ ] Reward calculator - Block rewards
 
 ---
 
@@ -1265,7 +1211,3 @@ Snapshot  // Validator candidates
 ```
 
 ---
-
-**End of Document**
-
-*This architecture overview provides a comprehensive guide to understanding the XDC consensus module implementation in Nethermind. For implementation details, refer to the source code in `src/Nethermind/Nethermind.Xdc/`.*

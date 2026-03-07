@@ -28,10 +28,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Autofac;
 using FluentAssertions;
-using Nethermind.Api;
 using Nethermind.Consensus.Validators;
 using Nethermind.Core.Test.Modules;
-using Nethermind.State;
 
 namespace Nethermind.Clique.Test;
 
@@ -105,10 +103,10 @@ public class CliqueBlockProducerTests
             SepoliaSpecProvider testnetSpecProvider = SepoliaSpecProvider.Instance;
             IReleaseSpec finalSpec = testnetSpecProvider.GetFinalSpec();
 
-            IWorldState stateProvider = container.Resolve<IWorldStateManager>().GlobalWorldState;
+            IWorldState stateProvider = container.Resolve<IMainProcessingContext>().WorldState;
             using (stateProvider.BeginScope(IWorldState.PreGenesis))
             {
-                stateProvider.CreateAccount(TestItem.PrivateKeyD.Address, 100.Ether());
+                stateProvider.CreateAccount(TestItem.PrivateKeyD.Address, 100.Ether);
                 if (finalSpec.WithdrawalsEnabled)
                 {
                     stateProvider.CreateAccount(Eip7002Constants.WithdrawalRequestPredeployAddress, 0, Eip7002TestConstants.Nonce);
@@ -280,7 +278,7 @@ public class CliqueBlockProducerTests
 
         public On ProcessGenesis(PrivateKey nodeKey)
         {
-            using var _ = _containers[nodeKey].Resolve<IWorldStateManager>().GlobalWorldState.BeginScope(IWorldState.PreGenesis);
+            using var _ = _containers[nodeKey].Resolve<IMainProcessingContext>().WorldState.BeginScope(IWorldState.PreGenesis);
             if (_logger.IsInfo) _logger.Info($"SUGGESTING GENESIS ON {nodeKey.Address}");
             _blockTrees[nodeKey].SuggestBlock(_genesis).Should().Be(AddBlockResult.Added);
             _blockEvents[nodeKey].WaitOne(_timeout);
@@ -289,7 +287,7 @@ public class CliqueBlockProducerTests
 
         public On ProcessGenesis3Validators(PrivateKey nodeKey)
         {
-            using var _ = _containers[nodeKey].Resolve<IWorldStateManager>().GlobalWorldState.BeginScope(IWorldState.PreGenesis);
+            using var _ = _containers[nodeKey].Resolve<IMainProcessingContext>().WorldState.BeginScope(IWorldState.PreGenesis);
             _blockTrees[nodeKey].SuggestBlock(_genesis3Validators);
             _blockEvents[nodeKey].WaitOne(_timeout);
             return this;
@@ -432,7 +430,7 @@ public class CliqueBlockProducerTests
             transaction.Value = 1;
             transaction.To = TestItem.AddressC;
             transaction.GasLimit = 30000;
-            transaction.GasPrice = 20.GWei();
+            transaction.GasPrice = 20.GWei;
             transaction.Nonce = _currentNonce + 1;
             transaction.SenderAddress = TestItem.PrivateKeyD.Address;
             transaction.Hash = transaction.CalculateHash();
@@ -449,7 +447,7 @@ public class CliqueBlockProducerTests
             transaction.Value = 1;
             transaction.To = TestItem.AddressC;
             transaction.GasLimit = 30000;
-            transaction.GasPrice = 0.GWei();
+            transaction.GasPrice = 0.GWei;
             transaction.Nonce = _currentNonce;
             transaction.SenderAddress = TestItem.PrivateKeyD.Address;
             transaction.Hash = transaction.CalculateHash();
@@ -461,7 +459,7 @@ public class CliqueBlockProducerTests
             transaction.Value = 1;
             transaction.To = TestItem.AddressC;
             transaction.GasLimit = 30000;
-            transaction.GasPrice = 20.GWei();
+            transaction.GasPrice = 20.GWei;
             transaction.Nonce = 0;
             transaction.SenderAddress = TestItem.PrivateKeyD.Address;
             transaction.Hash = transaction.CalculateHash();
@@ -473,7 +471,7 @@ public class CliqueBlockProducerTests
             transaction.Value = 1;
             transaction.To = TestItem.AddressC;
             transaction.GasLimit = 100000000;
-            transaction.GasPrice = 20.GWei();
+            transaction.GasPrice = 20.GWei;
             transaction.Nonce = _currentNonce;
             transaction.SenderAddress = TestItem.PrivateKeyD.Address;
             transaction.Hash = transaction.CalculateHash();
@@ -482,10 +480,10 @@ public class CliqueBlockProducerTests
 
             // insufficient balance
             transaction = new Transaction();
-            transaction.Value = 1000000000.Ether();
+            transaction.Value = 1000000000.Ether;
             transaction.To = TestItem.AddressC;
             transaction.GasLimit = 30000;
-            transaction.GasPrice = 20.GWei();
+            transaction.GasPrice = 20.GWei;
             transaction.Nonce = _currentNonce;
             transaction.SenderAddress = TestItem.PrivateKeyD.Address;
             transaction.Hash = transaction.CalculateHash();
@@ -502,7 +500,7 @@ public class CliqueBlockProducerTests
             transaction.Value = 1;
             transaction.To = TestItem.AddressC;
             transaction.GasLimit = 100000000;
-            transaction.GasPrice = 20.GWei();
+            transaction.GasPrice = 20.GWei;
             transaction.Nonce = _currentNonce;
             transaction.Data = Bytes.FromHexString("0xEF");
             transaction.SenderAddress = TestItem.PrivateKeyD.Address;
@@ -519,7 +517,7 @@ public class CliqueBlockProducerTests
             transaction.Value = 1;
             transaction.To = TestItem.AddressC;
             transaction.GasLimit = 30000;
-            transaction.GasPrice = 20.GWei();
+            transaction.GasPrice = 20.GWei;
             transaction.Nonce = _currentNonce + 1000;
             transaction.SenderAddress = TestItem.PrivateKeyD.Address;
             transaction.Hash = transaction.CalculateHash();

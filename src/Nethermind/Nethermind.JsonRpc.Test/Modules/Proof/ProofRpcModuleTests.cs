@@ -20,11 +20,11 @@ using Nethermind.Specs;
 using Nethermind.Specs.Forks;
 using Nethermind.Evm.State;
 using Nethermind.State.Proofs;
-using Nethermind.TxPool;
 using NUnit.Framework;
 using System.Threading.Tasks;
 using Autofac;
 using FluentAssertions;
+using Nethermind.Blockchain.Headers;
 using Nethermind.Config;
 using Nethermind.Consensus.Processing;
 using Nethermind.Core.Buffers;
@@ -44,22 +44,14 @@ namespace Nethermind.JsonRpc.Test.Modules.Proof;
 // [TestFixture(true, true)] TODO fix or remove test?
 [TestFixture(true, false)]
 [TestFixture(false, false)]
-public class ProofRpcModuleTests
+public class ProofRpcModuleTests(bool createZeroAccount, bool useNonZeroGasPrice)
 {
-    private readonly bool _createZeroAccount;
-    private readonly bool _useNonZeroGasPrice;
     private IProofRpcModule _proofRpcModule = null!;
     private IBlockTree _blockTree = null!;
     private IDbProvider _dbProvider = null!;
     private TestSpecProvider _specProvider = null!;
     private WorldStateManager _worldStateManager = null!;
     private IContainer _container;
-
-    public ProofRpcModuleTests(bool createZeroAccount, bool useNonZeroGasPrice)
-    {
-        _createZeroAccount = createZeroAccount;
-        _useNonZeroGasPrice = useNonZeroGasPrice;
-    }
 
     [SetUp]
     public async Task Setup()
@@ -68,7 +60,7 @@ public class ProofRpcModuleTests
         _worldStateManager = TestWorldStateFactory.CreateWorldStateManagerForTest(_dbProvider, LimboLogs.Instance);
 
         Hash256 stateRoot;
-        IWorldState worldState = _worldStateManager.GlobalWorldState;
+        IWorldState worldState = new WorldState(_worldStateManager.GlobalWorldState, LimboLogs.Instance);
         using (var _ = worldState.BeginScope(IWorldState.PreGenesis))
         {
             worldState.CreateAccount(TestItem.AddressA, 100000);
@@ -79,10 +71,10 @@ public class ProofRpcModuleTests
 
         InMemoryReceiptStorage receiptStorage = new();
         _specProvider = new TestSpecProvider(London.Instance);
-        _blockTree = Build.A.BlockTree(new Block(Build.A.BlockHeader.WithStateRoot(stateRoot).TestObject, new BlockBody()), _specProvider)
+        BlockTreeBuilder blockTreeBuilder = Build.A.BlockTree(new Block(Build.A.BlockHeader.WithStateRoot(stateRoot).TestObject, new BlockBody()), _specProvider)
             .WithTransactions(receiptStorage)
-            .OfChainLength(10)
-            .TestObject;
+            .OfChainLength(10);
+        _blockTree = blockTreeBuilder.TestObject;
 
         _container = new ContainerBuilder()
             .AddModule(new TestNethermindModule(new ConfigProvider()))
@@ -90,6 +82,7 @@ public class ProofRpcModuleTests
             .AddSingleton<IBlockPreprocessorStep>(new CompositeBlockPreprocessorStep(new RecoverSignatures(new EthereumEcdsa(TestBlockchainIds.ChainId), _specProvider, LimboLogs.Instance)))
             .AddSingleton<IBlockTree>(_blockTree)
             .AddSingleton<IDbProvider>(_dbProvider)
+            .AddSingleton<IHeaderFinder>(blockTreeBuilder.HeaderStore)
             .AddSingleton<IReceiptStorage>(receiptStorage)
             .AddSingleton<IWorldStateManager>(_worldStateManager)
             .Build();
@@ -176,14 +169,7 @@ public class ProofRpcModuleTests
         Assert.That(receiptWithProof.Receipt, Is.Not.Null);
         Assert.That(receiptWithProof.ReceiptProof.Length, Is.EqualTo(2));
 
-        if (withHeader)
-        {
-            Assert.That(receiptWithProof.BlockHeader, Is.Not.Null);
-        }
-        else
-        {
-            Assert.That(receiptWithProof.BlockHeader, Is.Null);
-        }
+        Assert.That(receiptWithProof.BlockHeader, withHeader ? Is.Not.Null : Is.Null);
 
         string response = await RpcTest.TestSerializedRequest(_proofRpcModule, "proof_getTransactionReceipt", txHash, withHeader);
         response.Should().Be(expectedResult);
@@ -274,7 +260,7 @@ public class ProofRpcModuleTests
         {
             From = TestItem.AddressA,
             To = TestItem.AddressB,
-            GasPrice = _useNonZeroGasPrice ? 10.GWei() : 0
+            GasPrice = useNonZeroGasPrice ? 10.GWei : 0
         };
 
         _proofRpcModule.proof_call(tx, new BlockParameter(block.Number));
@@ -297,7 +283,7 @@ public class ProofRpcModuleTests
         {
             From = TestItem.AddressA,
             To = TestItem.AddressB,
-            GasPrice = _useNonZeroGasPrice ? 10.GWei() : 0
+            GasPrice = useNonZeroGasPrice ? 10.GWei : 0
         };
         _proofRpcModule.proof_call(tx, new BlockParameter(block.Hash!));
 
@@ -320,7 +306,7 @@ public class ProofRpcModuleTests
         {
             From = TestItem.AddressA,
             To = TestItem.AddressB,
-            GasPrice = _useNonZeroGasPrice ? 10.GWei() : 0
+            GasPrice = useNonZeroGasPrice ? 10.GWei : 0
         };
 
         string response = await RpcTest.TestSerializedRequest(_proofRpcModule, "proof_call", tx, new { blockHash = block.Hash, requireCanonical = true });
@@ -500,7 +486,7 @@ public class ProofRpcModuleTests
             .Done;
 
         CallResultWithProof result = await TestCallWithCode(code);
-        Assert.That(result.Accounts.Length, Is.EqualTo(3 + (_useNonZeroGasPrice ? 1 : 0)));
+        Assert.That(result.Accounts.Length, Is.EqualTo(3 + (useNonZeroGasPrice ? 1 : 0)));
     }
 
     [TestCase]
@@ -664,7 +650,7 @@ public class ProofRpcModuleTests
             .Op(Instruction.CALL)
             .Done;
         CallResultWithProof result = await TestCallWithCode(code);
-        Assert.That(result.Accounts.Length, Is.EqualTo(3 + (_useNonZeroGasPrice ? 1 : 0)));
+        Assert.That(result.Accounts.Length, Is.EqualTo(3 + (useNonZeroGasPrice ? 1 : 0)));
     }
 
     [TestCase]
@@ -677,7 +663,7 @@ public class ProofRpcModuleTests
             .Done;
         CallResultWithProof result = await TestCallWithCode(code);
 
-        Assert.That(result.Accounts.Length, Is.EqualTo(3 + (_useNonZeroGasPrice ? 1 : 0)));
+        Assert.That(result.Accounts.Length, Is.EqualTo(3 + (useNonZeroGasPrice ? 1 : 0)));
     }
 
     [TestCase]
@@ -755,7 +741,7 @@ public class ProofRpcModuleTests
             .Op(Instruction.SSTORE)
             .Done;
 
-        await TestCallWithStorageAndCode(code, _useNonZeroGasPrice ? 10.GWei() : 0);
+        await TestCallWithStorageAndCode(code, useNonZeroGasPrice ? 10.GWei : 0);
     }
 
     [TestCase]
@@ -798,7 +784,7 @@ public class ProofRpcModuleTests
         {
             From = from,
             To = TestItem.AddressB,
-            GasPrice = _useNonZeroGasPrice ? 10.GWei() : 0
+            GasPrice = useNonZeroGasPrice ? 10.GWei : 0
         };
 
         CallResultWithProof callResultWithProof = _proofRpcModule.proof_call(tx, new BlockParameter(blockOnTop.Number)).Data;
@@ -856,19 +842,6 @@ public class ProofRpcModuleTests
         CallResultWithProof callResultWithProof = _proofRpcModule.proof_call(tx, new BlockParameter(blockOnTop.Number)).Data;
         Assert.That(callResultWithProof.Accounts.Length, Is.GreaterThan(0));
 
-        // just the keys for debugging
-        byte[] span = new byte[32];
-        new UInt256(0).ToBigEndian(span);
-        _ = Keccak.Compute(span);
-
-        // just the keys for debugging
-        new UInt256(1).ToBigEndian(span);
-        _ = Keccak.Compute(span);
-
-        // just the keys for debugging
-        new UInt256(2).ToBigEndian(span);
-        _ = Keccak.Compute(span);
-
         foreach (AccountProof accountProof in callResultWithProof.Accounts)
         {
             // this is here for diagnostics - so you can read what happens in the test
@@ -897,20 +870,20 @@ public class ProofRpcModuleTests
 
     private (IWorldState, Hash256) CreateInitialState(byte[]? code)
     {
-        IWorldState stateProvider = _worldStateManager.GlobalWorldState;
+        IWorldState stateProvider = new WorldState(_worldStateManager.GlobalWorldState, LimboLogs.Instance);
         using var _ = stateProvider.BeginScope(IWorldState.PreGenesis);
 
-        AddAccount(stateProvider, TestItem.AddressA, 1.Ether());
-        AddAccount(stateProvider, TestItem.AddressB, 1.Ether());
+        AddAccount(stateProvider, TestItem.AddressA, 1.Ether);
+        AddAccount(stateProvider, TestItem.AddressB, 1.Ether);
 
         if (code is not null)
         {
             AddCode(stateProvider, TestItem.AddressB, code);
         }
 
-        if (_createZeroAccount)
+        if (createZeroAccount)
         {
-            AddAccount(stateProvider, Address.Zero, 1.Ether());
+            AddAccount(stateProvider, Address.Zero, 1.Ether);
         }
 
         stateProvider.CommitTree(0);

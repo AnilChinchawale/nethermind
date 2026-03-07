@@ -44,7 +44,7 @@ public partial class BlockProcessor(
     : IBlockProcessor
 {
     private readonly ILogger _logger = logManager.GetClassLogger();
-    protected readonly WorldStateMetricsDecorator _stateProvider = new WorldStateMetricsDecorator(stateProvider);
+    protected readonly WorldStateMetricsDecorator _stateProvider = new(stateProvider);
     private readonly IReceiptsRootCalculator _receiptsRootCalculator = ReceiptsRootCalculator.Instance;
 
     /// <summary>
@@ -52,6 +52,8 @@ public partial class BlockProcessor(
     /// to any block-specific tracers.
     /// </summary>
     protected BlockReceiptsTracer ReceiptsTracer { get; set; } = new();
+
+    public event Action? TransactionsExecuted;
 
     public (Block Block, TxReceipt[] Receipts) ProcessOne(Block suggestedBlock, ProcessingOptions options, IBlockTracer blockTracer, IReleaseSpec spec, CancellationToken token)
     {
@@ -118,6 +120,10 @@ public partial class BlockProcessor(
 
         TxReceipt[] receipts = blockTransactionsExecutor.ProcessTransactions(block, options, ReceiptsTracer, token);
 
+        // Signal that transactions are done — subscribers can cancel background work (e.g. prewarmer)
+        // to free the thread pool for blooms, receipts root, state root parallel work below
+        TransactionsExecuted?.Invoke();
+
         _stateProvider.Commit(spec, commitRoots: false);
 
         CalculateBlooms(receipts);
@@ -128,12 +134,12 @@ public partial class BlockProcessor(
         }
 
         header.ReceiptsRoot = _receiptsRootCalculator.GetReceiptsRoot(receipts, spec, block.ReceiptsRoot);
+
         ApplyMinerRewards(block, blockTracer, spec);
         withdrawalProcessor.ProcessWithdrawals(block, spec);
 
         // We need to do a commit here as in _executionRequestsProcessor while executing system transactions
-        // we do WorldState.Commit(SystemTransactionReleaseSpec.Instance). In SystemTransactionReleaseSpec
-        // Eip158Enabled=false, so we end up persisting empty accounts created while processing withdrawals.
+        // the spec has Eip158Enabled=false, so we end up persisting empty accounts created while processing withdrawals.
         _stateProvider.Commit(spec, commitRoots: false);
 
         executionRequestsProcessor.ProcessExecutionRequests(block, _stateProvider, receipts, spec);

@@ -18,7 +18,6 @@ using Nethermind.Specs.Forks;
 using Nethermind.Evm.State;
 using Nethermind.State;
 using Nethermind.Trie;
-using Nethermind.Trie.Pruning;
 using NSubstitute;
 using NUnit.Framework;
 
@@ -243,20 +242,20 @@ namespace Nethermind.Store.Test
             Hash256 stateRoot;
             using (var _ = provider.BeginScope(IWorldState.PreGenesis))
             {
-                provider.CreateAccount(TestItem.AddressA, 1.Ether());
+                provider.CreateAccount(TestItem.AddressA, 1.Ether);
                 provider.Commit(MuirGlacier.Instance);
                 provider.CommitTree(0);
                 stateRoot = provider.StateRoot;
             }
 
-            var stats = stateReader.CollectStats(stateRoot, new MemDb(), Logger);
+            var stats = stateReader.CollectStats(Build.A.BlockHeader.WithStateRoot(stateRoot).WithNumber(0).TestObject, new MemDb(), Logger);
             stats.AccountCount.Should().Be(1);
         }
 
         [Test]
         public void IsInvalidContractSender_AccountHasCode_ReturnsTrue()
         {
-            IReleaseSpec releaseSpec = Substitute.For<IReleaseSpec>();
+            IReleaseSpec releaseSpec = ReleaseSpecSubstitute.Create();
             releaseSpec.IsEip3607Enabled.Returns(true);
             releaseSpec.IsEip7702Enabled.Returns(true);
             IDbProvider dbProvider = TestMemDbProvider.Init();
@@ -275,7 +274,7 @@ namespace Nethermind.Store.Test
         [Test]
         public void IsInvalidContractSender_AccountHasNoCode_ReturnsFalse()
         {
-            IReleaseSpec releaseSpec = Substitute.For<IReleaseSpec>();
+            IReleaseSpec releaseSpec = ReleaseSpecSubstitute.Create();
             releaseSpec.IsEip3607Enabled.Returns(true);
             releaseSpec.IsEip7702Enabled.Returns(true);
             IDbProvider dbProvider = TestMemDbProvider.Init();
@@ -293,7 +292,7 @@ namespace Nethermind.Store.Test
         [Test]
         public void IsInvalidContractSender_AccountHasDelegatedCode_ReturnsFalse()
         {
-            IReleaseSpec releaseSpec = Substitute.For<IReleaseSpec>();
+            IReleaseSpec releaseSpec = ReleaseSpecSubstitute.Create();
             releaseSpec.IsEip3607Enabled.Returns(true);
             releaseSpec.IsEip7702Enabled.Returns(true);
             IDbProvider dbProvider = TestMemDbProvider.Init();
@@ -313,7 +312,7 @@ namespace Nethermind.Store.Test
         [Test]
         public void IsInvalidContractSender_AccountHasCodeButDelegateReturnsTrue_ReturnsFalse()
         {
-            IReleaseSpec releaseSpec = Substitute.For<IReleaseSpec>();
+            IReleaseSpec releaseSpec = ReleaseSpecSubstitute.Create();
             releaseSpec.IsEip3607Enabled.Returns(true);
             releaseSpec.IsEip7702Enabled.Returns(true);
             IDbProvider dbProvider = TestMemDbProvider.Init();
@@ -333,7 +332,7 @@ namespace Nethermind.Store.Test
         [Test]
         public void IsInvalidContractSender_AccountHasDelegatedCodeBut7702IsNotEnabled_ReturnsTrue()
         {
-            IReleaseSpec releaseSpec = Substitute.For<IReleaseSpec>();
+            IReleaseSpec releaseSpec = ReleaseSpecSubstitute.Create();
             releaseSpec.IsEip3607Enabled.Returns(true);
             IDbProvider dbProvider = TestMemDbProvider.Init();
             (IWorldState sut, IStateReader reader) = TestWorldStateFactory.CreateForTestWithStateReader(dbProvider, LimboLogs.Instance);
@@ -352,7 +351,7 @@ namespace Nethermind.Store.Test
         [Test]
         public void IsInvalidContractSender_AccountHasDelegatedCodeBut3807IsNotEnabled_ReturnsFalse()
         {
-            IReleaseSpec releaseSpec = Substitute.For<IReleaseSpec>();
+            IReleaseSpec releaseSpec = ReleaseSpecSubstitute.Create();
             releaseSpec.IsEip7702Enabled.Returns(true);
             IDbProvider dbProvider = TestMemDbProvider.Init();
             (IWorldState sut, IStateReader reader) = TestWorldStateFactory.CreateForTestWithStateReader(dbProvider, LimboLogs.Instance);
@@ -375,14 +374,14 @@ namespace Nethermind.Store.Test
             Hash256 stateRoot;
             using (var _ = provider.BeginScope(IWorldState.PreGenesis))
             {
-                provider.CreateAccount(TestItem.AddressA, 1.Ether());
+                provider.CreateAccount(TestItem.AddressA, 1.Ether);
                 provider.Commit(MuirGlacier.Instance);
                 provider.CommitTree(0);
                 stateRoot = provider.StateRoot;
             }
 
             TrieStatsCollector visitor = new(new MemDb(), LimboLogs.Instance);
-            reader.RunTreeVisitor(visitor, stateRoot);
+            reader.RunTreeVisitor(visitor, Build.A.BlockHeader.WithStateRoot(stateRoot).WithNumber(0).TestObject);
         }
 
         [Test]
@@ -393,13 +392,13 @@ namespace Nethermind.Store.Test
             Hash256 stateRoot;
             using (var _ = provider.BeginScope(IWorldState.PreGenesis))
             {
-                provider.CreateAccount(TestItem.AddressA, 1.Ether());
+                provider.CreateAccount(TestItem.AddressA, 1.Ether);
                 provider.Commit(MuirGlacier.Instance);
                 provider.CommitTree(0);
                 stateRoot = provider.StateRoot;
             }
 
-            string state = reader.DumpState(stateRoot);
+            string state = reader.DumpState(Build.A.BlockHeader.WithStateRoot(stateRoot).WithNumber(0).TestObject);
             state.Should().NotBeEmpty();
         }
     }

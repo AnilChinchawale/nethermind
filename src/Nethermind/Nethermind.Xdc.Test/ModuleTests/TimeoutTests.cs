@@ -1,26 +1,24 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using FluentAssertions;
+using Nethermind.Core.Crypto;
+using Nethermind.Core.Test.Builders;
+using Nethermind.Xdc.Test.Helpers;
+using Nethermind.Xdc.Types;
+using NUnit.Framework;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
-using Nethermind.Consensus;
-using Nethermind.Core.Crypto;
-using Nethermind.Logging;
-using Nethermind.Xdc.Types;
-using Nethermind.Xdc.Test.Helpers;
-using NUnit.Framework;
-using Nethermind.Core.Test.Builders;
 
-namespace Nethermind.Xdc.Test.ModuleTests;
+namespace Nethermind.Xdc.Test;
 
 public class TimeoutTests
 {
     [Test]
     public async Task TestCountdownTimeoutToSendTimeoutMessage()
     {
-        var blockchain = await XdcTestBlockchain.Create();
+        using var blockchain = await XdcTestBlockchain.Create();
         var tcManager = blockchain.TimeoutCertificateManager;
         var ctx = blockchain.XdcContext;
         tcManager.OnCountdownTimer();
@@ -34,10 +32,8 @@ public class TimeoutTests
     [Test]
     public async Task TestCountdownTimeoutNotToSendTimeoutMessageIfNotInMasternodeList()
     {
-        var blockchain = await XdcTestBlockchain.Create();
+        using var blockchain = await XdcTestBlockchain.Create();
         // Create TCManager with a signer not in the Masternode list
-        var extraKey = blockchain.RandomKeys.First();
-
         blockchain.Signer.SetSigner(TestItem.PrivateKeyA);
 
         blockchain.TimeoutCertificateManager.OnCountdownTimer();
@@ -49,7 +45,7 @@ public class TimeoutTests
     [Test]
     public async Task TestTimeoutMessageHandlerSuccessfullyGenerateTC()
     {
-        var blockchain = await XdcTestBlockchain.Create();
+        using var blockchain = await XdcTestBlockchain.Create();
 
         var ctx = blockchain.XdcContext;
         var head = (XdcBlockHeader)blockchain.BlockTree.Head!.Header;

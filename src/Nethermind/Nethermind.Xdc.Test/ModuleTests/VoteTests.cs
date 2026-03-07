@@ -1,28 +1,26 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
 using FluentAssertions;
-using System.Linq;
-using System.Threading.Tasks;
-using Nethermind.Blockchain;
-using Nethermind.Core.Specs;
 using Nethermind.Crypto;
-using Nethermind.Db;
+using Nethermind.Synchronization.Peers;
 using Nethermind.Xdc.Spec;
 using Nethermind.Xdc.Test.Helpers;
 using Nethermind.Xdc.Types;
 using NSubstitute;
 using NUnit.Framework;
+using System;
+using System.Linq;
+using System.Threading.Tasks;
 
-namespace Nethermind.Xdc.Test.ModuleTests;
+namespace Nethermind.Xdc.Test;
 
 public class VoteTests
 {
     [Test]
     public async Task HandleVote_SuccessfullyGenerateAndProcessQc()
     {
-        var blockchain = await XdcTestBlockchain.Create();
+        using var blockchain = await XdcTestBlockchain.Create();
         var votesManager = CreateVotesManager(blockchain);
         IXdcConsensusContext ctx = blockchain.XdcContext;
 
@@ -80,12 +78,13 @@ public class VoteTests
     {
         return new VotesManager(
             blockchain.XdcContext,
+            Substitute.For<ISyncPeerPool>(),
             blockchain.BlockTree,
             blockchain.EpochSwitchManager,
             blockchain.SnapshotManager,
             blockchain.QuorumCertificateManager,
             blockchain.SpecProvider,
             blockchain.Signer,
-            NSubstitute.Substitute.For<IForensicsProcessor>());
+            Substitute.For<IForensicsProcessor>());
     }
 }

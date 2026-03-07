@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 Demerzel Solutions Limited
+// SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
@@ -17,6 +17,7 @@ using Nethermind.Core.Extensions;
 using Nethermind.Core.Timers;
 using Nethermind.Db;
 using Nethermind.Db.FullPruning;
+using Nethermind.Db.LogIndex;
 using Nethermind.Db.Rocks.Config;
 using Nethermind.Evm.State;
 using Nethermind.JsonRpc.Modules.Admin;
@@ -33,7 +34,6 @@ public class PruningTrieStateFactory(
     ISyncConfig syncConfig,
     IInitConfig initConfig,
     IPruningConfig pruningConfig,
-    IBlocksConfig blockConfig,
     IDbProvider dbProvider,
     IBlockTree blockTree,
     IFileSystem fileSystem,
@@ -45,7 +45,8 @@ public class PruningTrieStateFactory(
     ChainSpec chainSpec,
     IDisposableStack disposeStack,
     Lazy<IPathRecovery> pathRecovery,
-    ILogManager logManager
+    ILogManager logManager,
+    NodeStorageCache? nodeStorageCache = null
 )
 {
     private readonly ILogger _logger = logManager.GetClassLogger<PruningTrieStateFactory>();
@@ -55,35 +56,29 @@ public class PruningTrieStateFactory(
         CompositePruningTrigger compositePruningTrigger = new CompositePruningTrigger();
 
         IPruningTrieStore trieStore = mainPruningTrieStoreFactory.PruningTrieStore;
+
         ITrieStore mainWorldTrieStore = trieStore;
-        PreBlockCaches? preBlockCaches = null;
-        if (blockConfig.PreWarmStateOnBlockProcessing)
+
+        if (nodeStorageCache is not null)
         {
-            preBlockCaches = new PreBlockCaches();
-            mainWorldTrieStore = new PreCachedTrieStore(trieStore, preBlockCaches.RlpCache);
+            mainWorldTrieStore = new PreCachedTrieStore(mainWorldTrieStore, nodeStorageCache);
         }
 
         IKeyValueStoreWithBatching codeDb = dbProvider.CodeDb;
-        IWorldState worldState = syncConfig.TrieHealing
-            ? new HealingWorldState(
+        IWorldStateScopeProvider scopeProvider = syncConfig.TrieHealing
+            ? new HealingWorldStateScopeProvider(
                 mainWorldTrieStore,
+                codeDb,
                 mainNodeStorage,
-                codeDb,
                 pathRecovery,
-                logManager,
-                preBlockCaches,
-                // Main thread should only read from prewarm caches, not spend extra time updating them.
-                populatePreBlockCache: false)
-            : new WorldState(
+                logManager)
+            : new TrieStoreScopeProvider(
                 mainWorldTrieStore,
                 codeDb,
-                logManager,
-                preBlockCaches,
-                // Main thread should only read from prewarm caches, not spend extra time updating them.
-                populatePreBlockCache: false);
+                logManager);
 
         IWorldStateManager stateManager = new WorldStateManager(
-            worldState,
+            scopeProvider,
             trieStore,
             dbProvider,
             logManager,
@@ -102,14 +97,14 @@ public class PruningTrieStateFactory(
             mainNodeStorage,
             nodeStorageFactory,
             trieStore,
-            compositePruningTrigger,
-            preBlockCaches
+            compositePruningTrigger
         );
 
-        var verifyTrieStarter = new VerifyTrieStarter(stateManager, processExit!, logManager);
+        VerifyTrieStarter verifyTrieStarter = new(stateManager, processExit!, logManager);
         ManualPruningTrigger pruningTrigger = new();
         compositePruningTrigger.Add(pruningTrigger);
-        PruningTrieStateAdminRpcModule adminRpcModule = new PruningTrieStateAdminRpcModule(
+        disposeStack.Push(compositePruningTrigger);
+        PruningTrieStateAdminRpcModule adminRpcModule = new(
             pruningTrigger,
             blockTree,
             stateManager.GlobalStateReader,
@@ -124,12 +119,11 @@ public class PruningTrieStateFactory(
         INodeStorage mainNodeStorage,
         INodeStorageFactory nodeStorageFactory,
         IPruningTrieStore trieStore,
-        CompositePruningTrigger compositePruningTrigger,
-        PreBlockCaches? preBlockCaches)
+        CompositePruningTrigger compositePruningTrigger)
     {
         IPruningTrigger? CreateAutomaticTrigger(string dbPath)
         {
-            long threshold = pruningConfig.FullPruningThresholdMb.MB();
+            long threshold = pruningConfig.FullPruningThresholdMb.MB;
 
             switch (pruningConfig.FullPruningTrigger)
             {
@@ -181,7 +175,10 @@ public class MainPruningTrieStoreFactory
         IPruningConfig pruningConfig,
         IDbProvider dbProvider,
         INodeStorageFactory nodeStorageFactory,
+        IFinalizedStateProvider finalizedStateProvider,
+        IBlockTree blockTree,
         IDbConfig dbConfig,
+        ILogIndexConfig logIndexConfig,
         IHardwareInfo hardwareInfo,
         ILogManager logManager
     )
@@ -192,6 +189,9 @@ public class MainPruningTrieStoreFactory
 
         if (syncConfig.SnapServingEnabled == true && pruningConfig.PruningBoundary < syncConfig.SnapServingMaxDepth)
         {
+            // use PruningBoundary for log-index MaxReorgDepth before it's overwritten
+            logIndexConfig.MaxReorgDepth ??= pruningConfig.PruningBoundary;
+
             if (_logger.IsInfo) _logger.Info($"Snap serving enabled, but {nameof(pruningConfig.PruningBoundary)} is less than {syncConfig.SnapServingMaxDepth}. Setting to {syncConfig.SnapServingMaxDepth}.");
             pruningConfig.PruningBoundary = syncConfig.SnapServingMaxDepth;
         }
@@ -214,8 +214,8 @@ public class MainPruningTrieStoreFactory
         }
 
         IPruningStrategy pruningStrategy = Prune
-            .WhenCacheReaches(pruningConfig.DirtyCacheMb.MB())
-            .WhenPersistedCacheReaches(pruningConfig.CacheMb.MB() - pruningConfig.DirtyCacheMb.MB())
+            .WhenCacheReaches(pruningConfig.DirtyCacheMb.MB)
+            .WhenPersistedCacheReaches(pruningConfig.CacheMb.MB - pruningConfig.DirtyCacheMb.MB)
             .WhenLastPersistedBlockIsTooOld(pruningConfig.MaxUnpersistedBlockCount, pruningConfig.PruningBoundary)
             .UnlessLastPersistedBlockIsTooNew(pruningConfig.MinUnpersistedBlockCount, pruningConfig.PruningBoundary);
 
@@ -232,10 +232,18 @@ public class MainPruningTrieStoreFactory
 
         INodeStorage mainNodeStorage = nodeStorageFactory.WrapKeyValueStore(stateDb);
 
+        if (pruningConfig.SimulateLongFinalizationDepth != 0)
+        {
+            // Merge plugin also decorate this, but we want it to be the last decorator for this purpose, so its done
+            // manually here.
+            finalizedStateProvider = new DelayedFinalizedStateProvider(finalizedStateProvider, blockTree, pruningConfig.SimulateLongFinalizationDepth);
+        }
+
         PruningTrieStore = new TrieStore(
             mainNodeStorage,
             pruningStrategy,
             persistenceStrategy,
+            finalizedStateProvider,
             pruningConfig,
             logManager);
     }
@@ -253,7 +261,7 @@ public class MainPruningTrieStoreFactory
             }
         }
 
-        // On a 7950x (32 logical coree), assuming write buffer is large enough, the pruning time is about 3 second
+        // On a 7950x (32 logical cores), assuming write buffer is large enough, the pruning time is about 3 second
         // with 8GB of pruning cache. Lets assume that this is a safe estimate as the ssd can be a limitation also.
         long maximumDirtyCacheMb = Environment.ProcessorCount * 250;
         // It must be at least 1GB as on mainnet at least 500MB will remain to support snap sync. So pruning cache only drop to about 500MB after pruning.
@@ -261,7 +269,7 @@ public class MainPruningTrieStoreFactory
         if (pruningConfig.DirtyCacheMb > maximumDirtyCacheMb)
         {
             // The user can also change `--Db.StateDbWriteBufferSize`.
-            // Which may or may not be better as each read will need to go through eacch write buffer.
+            // Which may or may not be better as each read will need to go through each write buffer.
             // So having less of them is probably better..
             if (_logger.IsWarn) _logger.Warn($"Detected {pruningConfig.DirtyCacheMb}MB of dirty pruning cache config. Dirty cache more than {maximumDirtyCacheMb}MB is not recommended with {Environment.ProcessorCount} logical core as it may cause long memory pruning time which affect attestation.");
         }
@@ -273,4 +281,38 @@ public class MainPruningTrieStoreFactory
     }
 
     public IPruningTrieStore PruningTrieStore { get; }
+
+    // Used to simulate long reorg by delaying `FinalizedBlockNumber`
+    private class DelayedFinalizedStateProvider(
+        IFinalizedStateProvider finalizedStateProvider,
+        IBlockTree blockTree,
+        int pruningConfigSimulateLongFinalizationDepth
+    ) : IFinalizedStateProvider
+    {
+        private long? _lastFinalizedBlockNumber = null;
+
+        public long FinalizedBlockNumber
+        {
+            get
+            {
+                long baseFinalizedBlockNumber = finalizedStateProvider.FinalizedBlockNumber;
+
+                // Need to limit by head, otherwise it does not work for forward sync.
+                long headNumber = blockTree.Head?.Number ?? 0;
+                baseFinalizedBlockNumber = Math.Min(baseFinalizedBlockNumber, headNumber + pruningConfigSimulateLongFinalizationDepth / 2);
+
+                if (_lastFinalizedBlockNumber is null || baseFinalizedBlockNumber - _lastFinalizedBlockNumber > pruningConfigSimulateLongFinalizationDepth)
+                {
+                    _lastFinalizedBlockNumber = baseFinalizedBlockNumber;
+                }
+
+                return _lastFinalizedBlockNumber.Value;
+            }
+        }
+
+        public Hash256? GetFinalizedStateRootAt(long blockNumber)
+        {
+            return finalizedStateProvider.GetFinalizedStateRootAt(blockNumber);
+        }
+    }
 }

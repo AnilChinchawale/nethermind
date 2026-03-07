@@ -15,7 +15,12 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V62.Messages
         // Use the same decoder as RlpStream.Encode(BlockHeader) so that GetLength and Serialize
         // agree on the encoded size.  For XDC this will be XdcHeaderDecoder (set via
         // RlpStream.SetHeaderDecoder()); for all other chains it falls back to HeaderDecoder.
-        private static IHeaderDecoder GetHeaderDecoder() => RlpStream.ActiveHeaderDecoder;
+        private readonly IHeaderDecoder _headerDecoder;
+
+        public BlockHeadersMessageSerializer(IHeaderDecoder headerDecoder = null)
+        {
+            _headerDecoder = headerDecoder ?? RlpStream.ActiveHeaderDecoder ?? new HeaderDecoder();
+        }
 
         public void Serialize(IByteBuffer byteBuffer, BlockHeadersMessage message)
         {
@@ -26,32 +31,28 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V62.Messages
             rlpStream.StartSequence(contentLength);
             for (int i = 0; i < message.BlockHeaders.Count; i++)
             {
-                rlpStream.Encode(message.BlockHeaders[i]);
+                _headerDecoder.Encode(rlpStream, message.BlockHeaders[i]);
             }
         }
 
-        public BlockHeadersMessage Deserialize(IByteBuffer byteBuffer)
-        {
-            RlpStream rlpStream = new NettyRlpStream(byteBuffer);
-            return Deserialize(rlpStream);
-        }
+        public BlockHeadersMessage Deserialize(IByteBuffer byteBuffer) =>
+            byteBuffer.DeserializeRlp(Deserialize);
 
         public int GetLength(BlockHeadersMessage message, out int contentLength)
         {
             contentLength = 0;
-            IHeaderDecoder decoder = GetHeaderDecoder();
             for (int i = 0; i < message.BlockHeaders.Count; i++)
             {
-                contentLength += decoder.GetLength(message.BlockHeaders[i], RlpBehaviors.None);
+                contentLength += _headerDecoder.GetLength(message.BlockHeaders[i], RlpBehaviors.None);
             }
 
             return Rlp.LengthOfSequence(contentLength);
         }
 
-        public static BlockHeadersMessage Deserialize(RlpStream rlpStream)
+        public BlockHeadersMessage Deserialize(ref Rlp.ValueDecoderContext ctx)
         {
             BlockHeadersMessage message = new();
-            message.BlockHeaders = Rlp.DecodeArrayPool<BlockHeader>(rlpStream, limit: RlpLimit);
+            message.BlockHeaders = Rlp.DecodeArrayPool(ref ctx, _headerDecoder, limit: RlpLimit);
             return message;
         }
     }

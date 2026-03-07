@@ -1,35 +1,31 @@
-// SPDX-FileCopyrightText: 2024 Demerzel Solutions Limited
+// SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
-using System.Collections.Generic;
-using System.Reflection;
-using System.Threading.Tasks;
 using Autofac;
 using Nethermind.Api;
 using Nethermind.Config;
-using Nethermind.Consensus;
 using Nethermind.Consensus.Processing;
 using Nethermind.Consensus.Scheduler;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
-using Nethermind.Core.Test.Builders;
 using Nethermind.Core.Test.Modules;
-using Nethermind.Db;
-using Nethermind.Init.Modules;
 using Nethermind.JsonRpc;
 using Nethermind.KeyStore;
 using Nethermind.Logging;
 using Nethermind.Network;
 using Nethermind.Serialization.Json;
 using Nethermind.Serialization.Rlp;
-using Nethermind.Specs.ChainSpecStyle;
 using Nethermind.TxPool;
 using Nethermind.Wallet;
+using Nethermind.Xdc.Contracts;
 using Nethermind.Xdc.Spec;
 using Nethermind.Xdc.Types;
 using NSubstitute;
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Threading.Tasks;
 using Module = Autofac.Module;
 
 namespace Nethermind.Xdc.Test.Helpers;
@@ -53,8 +49,10 @@ public class XdcModuleTestOverrides(IConfigProvider configProvider, ILogManager 
             .AddModule(new PseudoNetworkModule())
             .AddModule(new TestBlockProcessingModule())
 
+            .AddSingleton<IMasternodeVotingContract, XdcTestDepositContract>()
+
             // add missing components
-            .AddSingleton<IPenaltyHandler, RandomPenalizer>()
+            .AddSingleton<IPenaltyHandler, PenaltyHandler>()
             .AddSingleton<IForensicsProcessor, TrustyForensics>()
 
             // Environments
@@ -86,9 +84,9 @@ public class XdcModuleTestOverrides(IConfigProvider configProvider, ILogManager 
         });
     }
 
-    internal class RandomPenalizer(ISpecProvider specProvider) : IPenaltyHandler
+    internal class RandomPenaltyHandler(ISpecProvider specProvider) : IPenaltyHandler
     {
-        Dictionary<Hash256, Address[]> _penaltiesCache = new();
+        readonly Dictionary<Hash256, Address[]> _penaltiesCache = new();
         public Address[] Penalize(long number, Hash256 currentHash, Address[] candidates, int count = 2)
         {
             var spec = specProvider.GetFinalSpec() as IXdcReleaseSpec ?? throw new ArgumentException("Must have XDC spec configured.");

@@ -6,7 +6,6 @@ using Autofac;
 using Nethermind.Abi;
 using Nethermind.Api;
 using Nethermind.Blockchain;
-using Nethermind.Blockchain.Find;
 using Nethermind.Blockchain.Receipts;
 using Nethermind.Blockchain.Spec;
 using Nethermind.Blockchain.Synchronization;
@@ -17,15 +16,17 @@ using Nethermind.Core.Specs;
 using Nethermind.Core.Timers;
 using Nethermind.Crypto;
 using Nethermind.Db;
+using Nethermind.Db.LogIndex;
 using Nethermind.Era1;
-using Nethermind.History;
 using Nethermind.JsonRpc;
 using Nethermind.Logging;
+using Nethermind.Monitoring.Config;
 using Nethermind.Network.Config;
 using Nethermind.Runner.Ethereum.Modules;
 using Nethermind.Specs.ChainSpecStyle;
 using Nethermind.TxPool;
 using Nethermind.Xdc;
+using Testably.Abstractions;
 
 namespace Nethermind.Init.Modules;
 
@@ -49,14 +50,17 @@ public class NethermindModule(ChainSpec chainSpec, IConfigProvider configProvide
                 configProvider.GetConfig<IReceiptConfig>(),
                 configProvider.GetConfig<ISyncConfig>()
             ))
+            .AddModule(new DbMonitoringModule())
             .AddModule(new WorldStateModule(configProvider.GetConfig<IInitConfig>()))
+            .AddModule(new PrewarmerModule(configProvider.GetConfig<IBlocksConfig>()))
             .AddModule(new BuiltInStepsModule())
             .AddModule(new RpcModules(configProvider.GetConfig<IJsonRpcConfig>()))
             .AddModule(new EraModule())
             .AddSource(new ConfigRegistrationSource())
             .AddModule(new BlockProcessingModule(configProvider.GetConfig<IInitConfig>(), configProvider.GetConfig<IBlocksConfig>()))
-            .AddModule(new BlockTreeModule(configProvider.GetConfig<IReceiptConfig>()))
+            .AddModule(new BlockTreeModule(configProvider.GetConfig<IReceiptConfig>(), configProvider.GetConfig<ILogIndexConfig>()))
             .AddModule(new XdcModule())
+            .AddModule(new MonitoringModule(configProvider.GetConfig<IMetricsConfig>()))
             .AddSingleton<ISpecProvider, ChainSpecBasedSpecProvider>()
 
             .AddKeyedSingleton<IProtectedPrivateKey>(IProtectedPrivateKey.NodeKey, (ctx) => ctx.Resolve<INethermindApi>().NodeKey!)
@@ -75,13 +79,16 @@ public class NethermindModule(ChainSpec chainSpec, IConfigProvider configProvide
 
             .AddSingleton<ITimestamper>(_ => Core.Timestamper.Default)
             .AddSingleton<ITimerFactory>(_ => Core.Timers.TimerFactory.Default)
-            .AddSingleton<IFileSystem>(_ => new FileSystem())
+            .AddSingleton<IFileSystem>(_ => new RealFileSystem())
             ;
 
         if (!configProvider.GetConfig<ITxPoolConfig>().BlobsSupport.IsPersistentStorage())
         {
             builder.AddSingleton<IBlobTxStorage>(NullBlobTxStorage.Instance);
         }
+
+        if (configProvider.GetConfig<IFlatDbConfig>().Enabled)
+            builder.AddModule(new FlatWorldStateModule(configProvider.GetConfig<IFlatDbConfig>()));
     }
 
     // Just a wrapper to make it clear, these three are expected to be available at the time of configurations.

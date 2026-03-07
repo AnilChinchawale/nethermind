@@ -1,5 +1,6 @@
-// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
+
 using Nethermind.Config;
 using Nethermind.Core.Extensions;
 using Nethermind.Db;
@@ -35,10 +36,10 @@ namespace Nethermind.Blockchain.Synchronization
         public long AncientBodiesBarrier { get; set; }
         public long AncientReceiptsBarrier { get; set; }
         public string PivotTotalDifficulty { get; set; }
-        private string _pivotNumber = "0";
-        public string PivotNumber
+        private long _pivotNumber = 0;
+        public long PivotNumber
         {
-            get => FastSync || SnapSync ? _pivotNumber : "0";
+            get => FastSync || SnapSync ? _pivotNumber : 0;
             set => _pivotNumber = value;
         }
 
@@ -82,10 +83,10 @@ namespace Nethermind.Blockchain.Synchronization
         /// </summary>
         public int HeaderStateDistance { get; set; } = 0;
 
-        public ulong FastHeadersMemoryBudget { get; set; } = (ulong)128.MB();
+        public ulong FastHeadersMemoryBudget { get; set; } = (ulong)128.MB;
         public bool EnableSnapSyncStorageRangeSplit { get; set; } = false;
-        public long ForwardSyncDownloadBufferMemoryBudget { get; set; } = 200.MiB();
-        public long ForwardSyncBlockProcessingQueueMemoryBudget { get; set; } = 200.MiB();
+        public long ForwardSyncDownloadBufferMemoryBudget { get; set; } = 200.MiB;
+        public long ForwardSyncBlockProcessingQueueMemoryBudget { get; set; } = 200.MiB;
 
         public override string ToString()
         {

@@ -20,7 +20,6 @@ using Nethermind.Core.Test.Db;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Logging;
 using Nethermind.Evm.State;
-using Nethermind.State;
 using NUnit.Framework;
 
 namespace Nethermind.Evm.Test;
@@ -37,8 +36,8 @@ public abstract class VirtualMachineTestsBase
     private IDb _stateDb;
     private IDisposable _worldStateCloser;
 
-    protected VirtualMachine Machine { get; private set; }
-    protected CodeInfoRepository CodeInfoRepository { get; private set; }
+    protected EthereumVirtualMachine Machine { get; private set; }
+    protected CacheCodeInfoRepository CodeInfoRepository { get; private set; }
     protected IWorldState TestState { get; private set; }
     protected static Address Contract { get; } = new("0xd75a3a95360e44a3874e691fb48d77855f127069");
     protected static Address Sender { get; } = TestItem.AddressA;
@@ -72,8 +71,8 @@ public abstract class VirtualMachineTestsBase
         _ethereumEcdsa = new EthereumEcdsa(SpecProvider.ChainId);
         IBlockhashProvider blockhashProvider = new TestBlockhashProvider(SpecProvider);
         CodeInfoRepository = new EthereumCodeInfoRepository(TestState);
-        Machine = new VirtualMachine(blockhashProvider, SpecProvider, logManager);
-        _processor = new TransactionProcessor(BlobBaseFeeCalculator.Instance, SpecProvider, TestState, Machine, CodeInfoRepository, logManager);
+        Machine = new EthereumVirtualMachine(blockhashProvider, SpecProvider, logManager);
+        _processor = new EthereumTransactionProcessor(BlobBaseFeeCalculator.Instance, SpecProvider, TestState, Machine, CodeInfoRepository, logManager);
     }
 
     [TearDown]
@@ -197,9 +196,10 @@ public abstract class VirtualMachineTestsBase
         int value = 1,
         long blockGasLimit = DefaultBlockGasLimit,
         byte[][]? blobVersionedHashes = null,
-        ulong excessBlobGas = 0)
+        ulong excessBlobGas = 0,
+        ulong gasPrice = 1)
     {
-        return PrepareTx((blockNumber, Timestamp), gasLimit, code, senderRecipientAndMiner, value, blockGasLimit, blobVersionedHashes, excessBlobGas);
+        return PrepareTx((blockNumber, Timestamp), gasLimit, code, senderRecipientAndMiner, value, blockGasLimit, blobVersionedHashes, excessBlobGas, gasPrice: gasPrice);
     }
 
     protected (Block block, Transaction transaction) PrepareTx(
@@ -211,7 +211,8 @@ public abstract class VirtualMachineTestsBase
         long blockGasLimit = DefaultBlockGasLimit,
         byte[][]? blobVersionedHashes = null,
         ulong excessBlobGas = 0,
-        Transaction transaction = null)
+        Transaction transaction = null,
+        ulong gasPrice = 1)
     {
         senderRecipientAndMiner ??= SenderRecipientAndMiner.Default;
 
@@ -220,14 +221,14 @@ public abstract class VirtualMachineTestsBase
         // earlier it used to work - because the cache mapping address:storageTree was never cleared on account of
         // TestState.CommitTrees() not being called. But now the WorldState.CommitTrees which also calls TestState.CommitTrees, clearing the cache.
         if (!TestState.AccountExists(senderRecipientAndMiner.Sender))
-            TestState.CreateAccount(senderRecipientAndMiner.Sender, 100.Ether());
+            TestState.CreateAccount(senderRecipientAndMiner.Sender, 100.Ether);
         else
-            TestState.AddToBalance(senderRecipientAndMiner.Sender, 100.Ether(), SpecProvider.GenesisSpec);
+            TestState.AddToBalance(senderRecipientAndMiner.Sender, 100.Ether, SpecProvider.GenesisSpec);
 
         if (!TestState.AccountExists(senderRecipientAndMiner.Recipient))
-            TestState.CreateAccount(senderRecipientAndMiner.Recipient, 100.Ether());
+            TestState.CreateAccount(senderRecipientAndMiner.Recipient, 100.Ether);
         else
-            TestState.AddToBalance(senderRecipientAndMiner.Recipient, 100.Ether(), SpecProvider.GenesisSpec);
+            TestState.AddToBalance(senderRecipientAndMiner.Recipient, 100.Ether, SpecProvider.GenesisSpec);
 
         if (code is not null)
         {
@@ -243,7 +244,7 @@ public abstract class VirtualMachineTestsBase
 
         transaction ??= Build.A.Transaction
             .WithGasLimit(gasLimit)
-            .WithGasPrice(1)
+            .WithGasPrice(gasPrice)
             .WithValue(value)
             .WithBlobVersionedHashes(blobVersionedHashes)
             .WithNonce(TestState.GetNonce(senderRecipientAndMiner.Sender))
@@ -261,7 +262,7 @@ public abstract class VirtualMachineTestsBase
     /// deprecated. Please use activation instead of blockNumber.
     /// </summary>
     protected (Block block, Transaction transaction) PrepareTx(long blockNumber, long gasLimit, byte[] code,
-        byte[] input, UInt256 value, SenderRecipientAndMiner senderRecipientAndMiner = null)
+        byte[] input, UInt256 value, SenderRecipientAndMiner senderRecipientAndMiner = null, ulong gasPrice = 1)
     {
         return PrepareTx((blockNumber, Timestamp), gasLimit, code, input, value, senderRecipientAndMiner);
     }
@@ -276,14 +277,14 @@ public abstract class VirtualMachineTestsBase
         // earlier it used to work - because the cache mapping address:storageTree was never cleared on account of
         // TestState.CommitTrees() not being called. But now the WorldState.CommitTrees which also calls TestState.CommitTrees, clearing the cache.
         if (!TestState.AccountExists(senderRecipientAndMiner.Sender))
-            TestState.CreateAccount(senderRecipientAndMiner.Sender, 100.Ether());
+            TestState.CreateAccount(senderRecipientAndMiner.Sender, 100.Ether);
         else
-            TestState.AddToBalance(senderRecipientAndMiner.Sender, 100.Ether(), SpecProvider.GenesisSpec);
+            TestState.AddToBalance(senderRecipientAndMiner.Sender, 100.Ether, SpecProvider.GenesisSpec);
 
         if (!TestState.AccountExists(senderRecipientAndMiner.Recipient))
-            TestState.CreateAccount(senderRecipientAndMiner.Recipient, 100.Ether());
+            TestState.CreateAccount(senderRecipientAndMiner.Recipient, 100.Ether);
         else
-            TestState.AddToBalance(senderRecipientAndMiner.Recipient, 100.Ether(), SpecProvider.GenesisSpec);
+            TestState.AddToBalance(senderRecipientAndMiner.Recipient, 100.Ether, SpecProvider.GenesisSpec);
         TestState.InsertCode(senderRecipientAndMiner.Recipient, code, SpecProvider.GenesisSpec);
 
         TestState.Commit(SpecProvider.GenesisSpec);
@@ -306,7 +307,7 @@ public abstract class VirtualMachineTestsBase
         SenderRecipientAndMiner senderRecipientAndMiner = null)
     {
         senderRecipientAndMiner ??= SenderRecipientAndMiner.Default;
-        TestState.CreateAccount(senderRecipientAndMiner.Sender, 100.Ether());
+        TestState.CreateAccount(senderRecipientAndMiner.Sender, 100.Ether);
         TestState.Commit(SpecProvider.GenesisSpec);
 
         Transaction transaction = Build.A.Transaction

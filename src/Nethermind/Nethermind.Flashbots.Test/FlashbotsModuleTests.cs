@@ -67,7 +67,7 @@ public partial class FlashbotsModuleTests
     private Block CreateBlock(EngineModuleTests.MergeTestBlockchain chain)
     {
         BlockHeader currentHeader = chain.BlockTree.Head.Header;
-        IWorldState State = chain.WorldStateManager.GlobalWorldState;
+        IWorldState State = chain.MainWorldState;
         using var _ = State.BeginScope(IWorldState.PreGenesis);
         State.CreateAccount(TestKeysAndAddress.TestAddr, TestKeysAndAddress.TestBalance);
         UInt256 nonce = State.GetNonce(TestKeysAndAddress.TestAddr);
@@ -78,8 +78,8 @@ public partial class FlashbotsModuleTests
         ];
 
         Transaction[] transactions = [
-            Build.A.Transaction.WithShardBlobTxTypeAndFields(1, spec: Prague.Instance).WithMaxFeePerGas(1.GWei()).WithMaxPriorityFeePerGas(1).SignedAndResolved(TestItem.PrivateKeyA).TestObject,
-            Build.A.Transaction.WithShardBlobTxTypeAndFields(2, spec: Osaka.Instance).WithMaxFeePerGas(1.GWei()).WithMaxPriorityFeePerGas(0).SignedAndResolved(TestItem.PrivateKeyB).TestObject,
+            Build.A.Transaction.WithShardBlobTxTypeAndFields(1, spec: Prague.Instance).WithMaxFeePerGas(1.GWei).WithMaxPriorityFeePerGas(1).SignedAndResolved(TestItem.PrivateKeyA).TestObject,
+            Build.A.Transaction.WithShardBlobTxTypeAndFields(2, spec: Osaka.Instance).WithMaxFeePerGas(1.GWei).WithMaxPriorityFeePerGas(0).SignedAndResolved(TestItem.PrivateKeyB).TestObject,
             Build.A.Transaction
                 .WithMaxFeePerGas(0)
                 .WithMaxPriorityFeePerGas(0)

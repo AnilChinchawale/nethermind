@@ -23,6 +23,7 @@ using Nethermind.Evm.State;
 using NSubstitute;
 
 namespace Nethermind.Era1.Test;
+
 public class Era1ModuleTests
 {
     [Test]
@@ -117,8 +118,12 @@ public class Era1ModuleTests
     [Test]
     public async Task CreateEraAndVerifyAccumulators()
     {
-        TestBlockchain testBlockchain = await BasicTestBlockchain.Create();
-        IWorldState worldState = testBlockchain.WorldStateManager.GlobalWorldState;
+        TestBlockchain testBlockchain = await BasicTestBlockchain.Create(
+            configurer: (builder) => builder.WithGenesisPostProcessor((block, state, specProvider) =>
+            {
+                state.AddToBalance(TestItem.AddressA, 10.Ether, specProvider.GenesisSpec);
+            })
+        );
 
         using TempPath tmpFile = TempPath.GetTempFile();
         Block genesis = testBlockchain.BlockFinder.FindBlock(0)!;
@@ -128,16 +133,7 @@ public class Era1ModuleTests
         UInt256 nonce = 0;
 
         List<Block> blocks = [];
-        using (worldState.BeginScope(genesis.Header))
-        {
-            worldState.AddToBalance(TestItem.AddressA, 10.Ether(), testBlockchain.SpecProvider.GenesisSpec);
-            worldState.RecalculateStateRoot();
-
-            genesis.Header.StateRoot = worldState.StateRoot;
-            worldState.CommitTree(0);
-
-            blocks.Add(genesis);
-        }
+        blocks.Add(genesis);
 
         BlockHeader uncle = Build.A.BlockHeader.TestObject;
 
@@ -222,7 +218,7 @@ public class Era1ModuleTests
             builder.AddScoped<IGenesisPostProcessor, IWorldState, ISpecProvider>((worldState, specProvider) =>
                 new FunctionalGenesisPostProcessor((block) =>
                 {
-                    worldState.AddToBalance(TestItem.AddressA, 10.Ether(), specProvider.GenesisSpec);
+                    worldState.AddToBalance(TestItem.AddressA, 10.Ether, specProvider.GenesisSpec);
                     worldState.RecalculateStateRoot();
                 }));
         });
