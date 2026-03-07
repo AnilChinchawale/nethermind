@@ -88,4 +88,14 @@ public static class XdcConstants
     /// Registered as a keyed IDb via ContainerBuilderExtensions.AddDatabase.
     /// </summary>
     public const string SnapshotDbName = "xdcSnapshot";
+
+    /// <summary>
+    /// XDC Mainnet chain ID
+    /// </summary>
+    public const int MainnetChainId = 50;
+
+    /// <summary>
+    /// XDC Apothem Testnet chain ID
+    /// </summary>
+    public const int ApothemChainId = 51;
 }
