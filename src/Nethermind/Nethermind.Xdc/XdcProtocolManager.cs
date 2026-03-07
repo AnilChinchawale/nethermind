@@ -22,6 +22,7 @@ using Nethermind.Synchronization;
 using Nethermind.Synchronization.Peers;
 using Nethermind.TxPool;
 using Nethermind.Xdc.P2P;
+using Nethermind.Xdc.P2P.Eth100;
 using System;
 using System.Collections.Generic;
 
@@ -78,7 +79,9 @@ internal class XdcProtocolManager : ProtocolsManager
                 63 => new Eth63ProtocolHandler(session, _serializer, _stats, _syncServer, _backgroundTaskScheduler, _txPool, _gossipPolicy, _logManager, _txGossipPolicy),
                 64 => new Eth64ProtocolHandler(session, _serializer, _stats, _syncServer, _backgroundTaskScheduler, _txPool, _gossipPolicy, _forkInfo, _logManager, _txGossipPolicy),
                 65 => new Eth65ProtocolHandler(session, _serializer, _stats, _syncServer, _backgroundTaskScheduler, _txPool, _gossipPolicy, _forkInfo, _logManager, _txGossipPolicy),
-                100 => new XdcProtocolHandler(timeoutCertificateManager, votesManager, syncInfoManager, session, _serializer, _stats, _syncServer, _backgroundTaskScheduler, _txPool, _gossipPolicy, _forkInfo, _logManager, _txGossipPolicy),
+                // eth/100 uses Eth100ProtocolHandler (registered via custom factory) NOT XdcProtocolHandler
+                // XdcProtocolHandler is for XDC-specific subprotocol, not eth/100
+                100 => throw new NotSupportedException("Eth/100 protocol must be handled via Eth100ProtocolFactory. Ensure XdcPlugin.InitNetworkProtocol() registers the custom factory."),
                 _ => throw new NotSupportedException($"Eth protocol version {version} is not supported.")
             };
             InitSyncPeerProtocol(session, ethHandler);
