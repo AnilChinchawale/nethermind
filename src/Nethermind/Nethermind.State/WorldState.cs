@@ -42,11 +42,6 @@ namespace Nethermind.State
                 GuardInScope();
                 return _stateProvider.StateRoot;
             }
-            internal set
-            {
-                _stateProvider.StateRoot = value;
-                _persistentStorageProvider.StateRoot = value;
-            }
         }
 
         public WorldState(

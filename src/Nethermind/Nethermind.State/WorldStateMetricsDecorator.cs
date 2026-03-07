@@ -54,11 +54,6 @@ public class WorldStateMetricsDecorator(IWorldState innerState) : IWorldState
     public Hash256 StateRoot
     {
         get => innerState.StateRoot;
-        set
-        {
-            if (innerState is WorldState ws)
-                ws.StateRoot = value;
-        }
     }
 
     public double StateMerkleizationTime { get; private set; }
