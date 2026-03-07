@@ -5,6 +5,7 @@ using DotNetty.Buffers;
 using Nethermind.Serialization.Rlp;
 using Nethermind.Xdc.RLP;
 using Nethermind.Network;
+using System;
 
 namespace Nethermind.Xdc.P2P.Eth100.Messages
 {
@@ -21,8 +22,10 @@ namespace Nethermind.Xdc.P2P.Eth100.Messages
 
         public VoteP2PMessage Deserialize(IByteBuffer byteBuffer)
         {
-            RlpStream rlpStream = new NettyRlpStream(byteBuffer);
-            var vote = _voteDecoder.Decode(rlpStream);
+            Memory<byte> memory = byteBuffer.AsMemory();
+            Rlp.ValueDecoderContext ctx = new(memory, true);
+            var vote = _voteDecoder.Decode(ref ctx);
+            byteBuffer.SkipBytes(memory.Length);
             return new VoteP2PMessage(vote);
         }
 

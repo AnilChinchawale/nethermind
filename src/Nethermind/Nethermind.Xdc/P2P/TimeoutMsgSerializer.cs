@@ -17,10 +17,9 @@ internal class TimeoutMsgSerializer : IZeroInnerMessageSerializer<TimeoutMsg>
 
     public void Serialize(IByteBuffer byteBuffer, TimeoutMsg message)
     {
-        int totalLength = GetLength(message, out int contentLength);
-        byteBuffer.EnsureWritable(totalLength);
-        NettyRlpStream stream = new(byteBuffer);
-        _timeDecoder.Encode(stream, message.Timeout);
+        Rlp rlp = _timeDecoder.Encode(message.Timeout);
+        byteBuffer.EnsureWritable(rlp.Length);
+        byteBuffer.WriteBytes(rlp.Bytes);
     }
 
     public TimeoutMsg Deserialize(IByteBuffer byteBuffer)
@@ -34,7 +33,8 @@ internal class TimeoutMsgSerializer : IZeroInnerMessageSerializer<TimeoutMsg>
 
     public int GetLength(TimeoutMsg message, out int contentLength)
     {
-        contentLength = _timeDecoder.GetContentLength(message.Timeout, RlpBehaviors.None);
-        return _timeDecoder.GetLength(message.Timeout, RlpBehaviors.None);
+        Rlp rlp = _timeDecoder.Encode(message.Timeout);
+        contentLength = rlp.Length;
+        return rlp.Length;
     }
 }

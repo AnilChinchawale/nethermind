@@ -88,4 +88,29 @@ public static class XdcConstants
     /// Registered as a keyed IDb via ContainerBuilderExtensions.AddDatabase.
     /// </summary>
     public const string SnapshotDbName = "xdcSnapshot";
+
+    /// <summary>
+    /// Cache size limit for BlockSigners transactions
+    /// </summary>
+    public const int BlockSignersCacheLimit = 1000;
+
+    /// <summary>
+    /// Sign method identifier for block signing transactions
+    /// </summary>
+    public const string SignMethod = "sign";
+
+    /// <summary>
+    /// Minimum number of blocks a miner must produce per epoch
+    /// </summary>
+    public const int MinimumMinerBlockPerEpoch = 1;
+
+    /// <summary>
+    /// Default target gas limit for XDC blocks
+    /// </summary>
+    public const long DefaultTargetGasLimit = 42000000;
+
+    /// <summary>
+    /// Data length for sign transactions
+    /// </summary>
+    public const int SignTransactionDataLength = 65;
 }

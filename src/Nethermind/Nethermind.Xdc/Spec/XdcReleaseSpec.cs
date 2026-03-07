@@ -4,6 +4,7 @@
 using Nethermind.Core;
 using Nethermind.Core.Specs;
 using Nethermind.Specs;
+using System;
 using System.Collections.Generic;
 
 namespace Nethermind.Xdc.Spec;
@@ -37,12 +38,30 @@ public class XdcReleaseSpec : ReleaseSpec, IXdcReleaseSpec
     public long Reward { get; set; } = 250;   // total reward per epoch in XDC (ether units)
     public long MergeSignRange { get; set; } = 15; // only blocks divisible by this qualify
 
+    // Additional XDC-specific properties
+    public Address MasternodeVotingContract { get; set; } = XdcConstants.ValidatorAddress;
+    public bool IsTipTrc21FeeEnabled { get; set; }
+    public bool IsBlackListingEnabled { get; set; }
+    public bool IsTIP2019 { get; set; }
+    public bool IsTIPXDCXMiner { get; set; }
+    public bool IsDynamicGasLimitBlock { get; set; }
+    public bool IsTipUpgradePenaltyEnabled { get; set; }
+    public Address[] BlackListedAddresses { get; set; } = Array.Empty<Address>();
+    public Address RandomizeSMCBinary { get; set; } = XdcConstants.RandomizeAddress;
+    public Address XDCXLendingFinalizedTradeAddressBinary { get; set; }
+    public Address XDCXLendingAddressBinary { get; set; }
+    public Address XDCXAddressBinary { get; set; }
+    public Address TradingStateAddressBinary { get; set; }
+    public int LimitPenaltyEpochV2 { get; set; }
+    public long RangeReturnSigner { get; set; }
+    public double CertificateThreshold { get; set; } = 0.667;
+
     public void ApplyV2Config(ulong round)
     {
         V2ConfigParams configParams = GetConfigAtRound(V2Configs, round);
         SwitchRound = configParams.SwitchRound;
         MaxMasternodes = configParams.MaxMasternodes;
-        CertThreshold = configParams.CertThreshold;
+        CertThreshold = configParams.CertificateThreshold;
         TimeoutSyncThreshold = configParams.TimeoutSyncThreshold;
         TimeoutPeriod = configParams.TimeoutPeriod;
         MinePeriod = configParams.MinePeriod;
@@ -108,6 +127,24 @@ public interface IXdcReleaseSpec : IReleaseSpec
     Address BlockSignerContract { get; set; }
     long Reward { get; set; }           // total reward per epoch in XDC (ether units)
     long MergeSignRange { get; set; }   // only blocks divisible by this qualify
+
+    // Additional XDC-specific properties
+    Address MasternodeVotingContract { get; set; }
+    bool IsTipTrc21FeeEnabled { get; set; }
+    bool IsBlackListingEnabled { get; set; }
+    bool IsTIP2019 { get; set; }
+    bool IsTIPXDCXMiner { get; set; }
+    bool IsDynamicGasLimitBlock { get; set; }
+    bool IsTipUpgradePenaltyEnabled { get; set; }
+    Address[] BlackListedAddresses { get; set; }
+    Address RandomizeSMCBinary { get; set; }
+    Address XDCXLendingFinalizedTradeAddressBinary { get; set; }
+    Address XDCXLendingAddressBinary { get; set; }
+    Address XDCXAddressBinary { get; set; }
+    Address TradingStateAddressBinary { get; set; }
+    int LimitPenaltyEpochV2 { get; set; }
+    long RangeReturnSigner { get; set; }
+    double CertificateThreshold { get; set; }
 
     public void ApplyV2Config(ulong round);
 }

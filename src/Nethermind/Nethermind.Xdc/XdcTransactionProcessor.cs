@@ -5,6 +5,7 @@ using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
 using Nethermind.Evm;
+using Nethermind.Evm.GasPolicy;
 using Nethermind.Evm.State;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Evm.Tracing;
@@ -29,13 +30,13 @@ namespace Nethermind.Xdc;
 /// 
 /// Reference: https://github.com/XinFinOrg/XDPoSChain/blob/master/core/state_processor.go
 /// </summary>
-public class XdcTransactionProcessor : TransactionProcessorBase
+public class XdcTransactionProcessor : TransactionProcessorBase<EthereumGasPolicy>
 {
     public XdcTransactionProcessor(
         ITransactionProcessor.IBlobBaseFeeCalculator blobBaseFeeCalculator,
         ISpecProvider? specProvider,
         IWorldState? worldState,
-        IVirtualMachine? virtualMachine,
+        IVirtualMachine<EthereumGasPolicy>? virtualMachine,
         ICodeInfoRepository? codeInfoRepository,
         ILogManager? logManager)
         : base(blobBaseFeeCalculator, specProvider, worldState, virtualMachine, codeInfoRepository, logManager)
@@ -182,7 +183,7 @@ public class XdcTransactionProcessor : TransactionProcessorBase
                 if (Logger.IsDebug)
                     Logger.Debug($"BlockSigners tx invalid nonce: expected {nonce}, got {tx.Nonce}");
 
-                return TransactionResult.WrongTransactionNonce;
+                return TransactionResult.TransactionNonceTooLow;
             }
             WorldState.IncrementNonce(sender);
 

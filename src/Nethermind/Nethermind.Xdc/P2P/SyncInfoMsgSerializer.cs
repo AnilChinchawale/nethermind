@@ -5,6 +5,7 @@ using DotNetty.Buffers;
 using Nethermind.Core;
 using Nethermind.Network;
 using Nethermind.Serialization.Rlp;
+using Nethermind.Xdc.RLP;
 using System;
 
 namespace Nethermind.Xdc.P2P;

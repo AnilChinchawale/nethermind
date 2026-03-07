@@ -5,6 +5,7 @@ using DotNetty.Buffers;
 using Nethermind.Serialization.Rlp;
 using Nethermind.Xdc.RLP;
 using Nethermind.Network;
+using System;
 
 namespace Nethermind.Xdc.P2P.Eth100.Messages
 {
@@ -21,8 +22,10 @@ namespace Nethermind.Xdc.P2P.Eth100.Messages
 
         public TimeoutP2PMessage Deserialize(IByteBuffer byteBuffer)
         {
-            RlpStream rlpStream = new NettyRlpStream(byteBuffer);
-            var timeout = _timeoutDecoder.Decode(rlpStream);
+            Memory<byte> memory = byteBuffer.AsMemory();
+            Rlp.ValueDecoderContext ctx = new(memory, true);
+            var timeout = _timeoutDecoder.Decode(ref ctx);
+            byteBuffer.SkipBytes(memory.Length);
             return new TimeoutP2PMessage(timeout);
         }
 

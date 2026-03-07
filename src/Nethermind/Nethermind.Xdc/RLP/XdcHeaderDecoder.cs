@@ -14,7 +14,7 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
     public BlockHeader? Decode(ref Rlp.ValueDecoderContext decoderContext,
         RlpBehaviors rlpBehaviors = RlpBehaviors.None)
     {
-        if (decoderContext.IsNextItemNull())
+        if (decoderContext.IsNextItemEmptyList())
         {
             return null;
         }
@@ -69,70 +69,6 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
         if ((rlpBehaviors & RlpBehaviors.AllowExtraBytes) != RlpBehaviors.AllowExtraBytes)
         {
             decoderContext.Check(headerCheck);
-        }
-
-        return blockHeader;
-    }
-
-    public BlockHeader? Decode(RlpStream rlpStream, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
-    {
-        if (rlpStream.IsNextItemNull())
-        {
-            rlpStream.ReadByte();
-            return null;
-        }
-
-        Span<byte> headerRlp = rlpStream.PeekNextItem();
-        int headerSequenceLength = rlpStream.ReadSequenceLength();
-        int headerCheck = rlpStream.Position + headerSequenceLength;
-
-        Hash256? parentHash = rlpStream.DecodeKeccak();
-        Hash256? unclesHash = rlpStream.DecodeKeccak();
-        Address? beneficiary = rlpStream.DecodeAddress();
-        Hash256? stateRoot = rlpStream.DecodeKeccak();
-        Hash256? transactionsRoot = rlpStream.DecodeKeccak();
-        Hash256? receiptsRoot = rlpStream.DecodeKeccak();
-        Bloom? bloom = rlpStream.DecodeBloom();
-        UInt256 difficulty = rlpStream.DecodeUInt256();
-        long number = rlpStream.DecodeLong();
-        long gasLimit = rlpStream.DecodeLong();
-        long gasUsed = rlpStream.DecodeLong();
-        ulong timestamp = rlpStream.DecodeULong();
-        byte[]? extraData = rlpStream.DecodeByteArray();
-
-        XdcBlockHeader blockHeader = new(
-            parentHash,
-            unclesHash,
-            beneficiary,
-            difficulty,
-            number,
-            gasLimit,
-            timestamp,
-            extraData)
-        {
-            StateRoot = stateRoot,
-            TxRoot = transactionsRoot,
-            ReceiptsRoot = receiptsRoot,
-            Bloom = bloom,
-            GasUsed = gasUsed,
-            Hash = Keccak.Compute(headerRlp)
-        };
-
-        blockHeader.MixHash = rlpStream.DecodeKeccak();
-        blockHeader.Nonce = (ulong)rlpStream.DecodeUInt256(NonceLength);
-
-        blockHeader.Validators = rlpStream.DecodeByteArray();
-        if ((rlpBehaviors & RlpBehaviors.ForSealing) != RlpBehaviors.ForSealing)
-        {
-            blockHeader.Validator = rlpStream.DecodeByteArray();
-        }
-        blockHeader.Penalties = rlpStream.DecodeByteArray();
-
-        if (rlpStream.Position != headerCheck) blockHeader.BaseFeePerGas = rlpStream.DecodeUInt256();
-
-        if ((rlpBehaviors & RlpBehaviors.AllowExtraBytes) != RlpBehaviors.AllowExtraBytes)
-        {
-            rlpStream.Check(headerCheck);
         }
 
         return blockHeader;
@@ -204,7 +140,7 @@ public sealed class XdcHeaderDecoder : IHeaderDecoder
     {
         if (item is null)
         {
-            return Rlp.OfEmptySequence;
+            return Rlp.OfEmptyList;
         }
 
         XdcBlockHeader header = item as XdcBlockHeader ?? AsXdcHeader(item);

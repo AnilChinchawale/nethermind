@@ -15,10 +15,9 @@ internal class VoteMsgSerializer : IZeroInnerMessageSerializer<VoteMsg>
 
     public void Serialize(IByteBuffer byteBuffer, VoteMsg message)
     {
-        int totalLength = GetLength(message, out int contentLength);
-        byteBuffer.EnsureWritable(totalLength);
-        NettyRlpStream stream = new(byteBuffer);
-        _voteDecoder.Encode(stream, message.Vote);
+        Rlp rlp = _voteDecoder.Encode(message.Vote);
+        byteBuffer.EnsureWritable(rlp.Length);
+        byteBuffer.WriteBytes(rlp.Bytes);
     }
 
     public VoteMsg Deserialize(IByteBuffer byteBuffer)
@@ -32,7 +31,8 @@ internal class VoteMsgSerializer : IZeroInnerMessageSerializer<VoteMsg>
 
     public int GetLength(VoteMsg message, out int contentLength)
     {
-        contentLength = _voteDecoder.GetContentLength(message.Vote, RlpBehaviors.None);
-        return _voteDecoder.GetLength(message.Vote, RlpBehaviors.None);
+        Rlp rlp = _voteDecoder.Encode(message.Vote);
+        contentLength = rlp.Length;
+        return rlp.Length;
     }
 }

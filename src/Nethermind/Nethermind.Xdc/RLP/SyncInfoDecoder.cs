@@ -6,18 +6,10 @@ using Nethermind.Xdc.Types;
 
 namespace Nethermind.Xdc.RLP
 {
-    public class SyncInfoDecoder : IRlpStreamDecoder<SyncInfo>, IRlpValueDecoder<SyncInfo>
+    public class SyncInfoDecoder : IRlpValueDecoder<SyncInfo>, IRlpStreamEncoder<SyncInfo>
     {
         private readonly QuorumCertificateDecoder _qcDecoder = new();
         private readonly TimeoutCertificateDecoder _tcDecoder = new();
-
-        public SyncInfo Decode(RlpStream rlpStream, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
-        {
-            rlpStream.ReadSequenceLength();
-            QuorumCertificate highestQC = _qcDecoder.Decode(rlpStream, rlpBehaviors);
-            TimeoutCertificate highestTC = _tcDecoder.Decode(rlpStream, rlpBehaviors);
-            return new SyncInfo(highestQC, highestTC);
-        }
 
         public SyncInfo Decode(ref Rlp.ValueDecoderContext decoderContext, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
         {
@@ -44,10 +36,15 @@ namespace Nethermind.Xdc.RLP
 
         public int GetLength(SyncInfo item, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
         {
+            return Rlp.LengthOfSequence(GetContentLength(item, rlpBehaviors));
+        }
+
+        public int GetContentLength(SyncInfo item, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
+        {
             int contentLength = 0;
             contentLength += _qcDecoder.GetLength(item.HighestQuorumCert, rlpBehaviors);
             contentLength += _tcDecoder.GetLength(item.HighestTimeoutCert, rlpBehaviors);
-            return Rlp.LengthOfSequence(contentLength);
+            return contentLength;
         }
     }
 }
