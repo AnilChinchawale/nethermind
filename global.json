@@ -2,7 +2,7 @@
   "sdk": {
     "version": "9.0.200",
     "allowPrerelease": false,
-    "rollForward": "latestFeature"
+    "rollForward": "latestMajor"
   },
   "test": {
     "runner": "Microsoft.Testing.Platform"
