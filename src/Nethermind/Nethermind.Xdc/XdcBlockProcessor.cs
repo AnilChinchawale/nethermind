@@ -21,6 +21,7 @@ using Nethermind.Evm.Tracing;
 using Nethermind.Logging;
 
 namespace Nethermind.Xdc;
+
 internal class XdcBlockProcessor : BlockProcessor
 {
     private readonly ILogger _logger;

@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2023 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
 using Autofac;
 using FluentAssertions;
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.Synchronization;
 using Nethermind.Config;
+using Nethermind.Consensus.Processing;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Test.Builders;
@@ -25,27 +25,29 @@ namespace Nethermind.Store.Test;
 
 public class WorldStateManagerTests
 {
+    private static (IWorldStateScopeProvider worldState, IPruningTrieStore trieStore, WorldStateManager manager) CreateWorldStateManager()
+    {
+        IWorldStateScopeProvider worldState = Substitute.For<IWorldStateScopeProvider>();
+        IPruningTrieStore trieStore = Substitute.For<IPruningTrieStore>();
+        IDbProvider dbProvider = TestMemDbProvider.Init();
+        WorldStateManager manager = new WorldStateManager(worldState, trieStore, dbProvider, LimboLogs.Instance);
+        return (worldState, trieStore, manager);
+    }
+
     [Test]
     public void ShouldProxyGlobalWorldState()
     {
-        IWorldState worldState = Substitute.For<IWorldState>();
-        IPruningTrieStore trieStore = Substitute.For<IPruningTrieStore>();
-        IDbProvider dbProvider = TestMemDbProvider.Init();
-        WorldStateManager worldStateManager = new WorldStateManager(worldState, trieStore, dbProvider, LimboLogs.Instance);
-
-        worldStateManager.GlobalWorldState.Should().Be(worldState);
+        (IWorldStateScopeProvider worldState, _, WorldStateManager manager) = CreateWorldStateManager();
+        manager.GlobalWorldState.Should().Be(worldState);
     }
 
     [Test]
     public void ShouldProxyReorgBoundaryEvent()
     {
-        IWorldState worldState = Substitute.For<IWorldState>();
-        IPruningTrieStore trieStore = Substitute.For<IPruningTrieStore>();
-        IDbProvider dbProvider = TestMemDbProvider.Init();
-        WorldStateManager worldStateManager = new WorldStateManager(worldState, trieStore, dbProvider, LimboLogs.Instance);
+        (_, IPruningTrieStore trieStore, WorldStateManager manager) = CreateWorldStateManager();
 
         bool gotEvent = false;
-        worldStateManager.ReorgBoundaryReached += (sender, reached) => gotEvent = true;
+        manager.ReorgBoundaryReached += (sender, reached) => gotEvent = true;
         trieStore.ReorgBoundaryReached += Raise.EventWith<ReorgBoundaryReached>(new ReorgBoundaryReached(1));
 
         gotEvent.Should().BeTrue();
@@ -55,21 +57,18 @@ public class WorldStateManagerTests
     [TestCase(INodeStorage.KeyScheme.HalfPath, false)]
     public void ShouldNotSupportHashLookupOnHalfpath(INodeStorage.KeyScheme keyScheme, bool hashSupported)
     {
-        IWorldState worldState = Substitute.For<IWorldState>();
-        IPruningTrieStore trieStore = Substitute.For<IPruningTrieStore>();
+        (_, IPruningTrieStore trieStore, WorldStateManager manager) = CreateWorldStateManager();
         IReadOnlyTrieStore readOnlyTrieStore = Substitute.For<IReadOnlyTrieStore>();
         trieStore.AsReadOnly().Returns(readOnlyTrieStore);
         trieStore.Scheme.Returns(keyScheme);
-        IDbProvider dbProvider = TestMemDbProvider.Init();
-        WorldStateManager worldStateManager = new WorldStateManager(worldState, trieStore, dbProvider, LimboLogs.Instance);
 
         if (hashSupported)
         {
-            worldStateManager.HashServer.Should().NotBeNull();
+            manager.HashServer.Should().NotBeNull();
         }
         else
         {
-            worldStateManager.HashServer.Should().BeNull();
+            manager.HashServer.Should().BeNull();
         }
     }
 
@@ -81,14 +80,19 @@ public class WorldStateManagerTests
         IBlockTree blockTree = Substitute.For<IBlockTree>();
         IConfigProvider configProvider = new ConfigProvider();
         int reorgDepth = configProvider.GetConfig<ISyncConfig>().SnapServingMaxDepth;
+        IFinalizedStateProvider manualFinalizedStateProvider = Substitute.For<IFinalizedStateProvider>();
+        manualFinalizedStateProvider.FinalizedBlockNumber.Returns(lastBlock - reorgDepth);
+        manualFinalizedStateProvider.GetFinalizedStateRootAt(lastBlock - reorgDepth)
+            .Returns(new Hash256("0xec6063a04d48f4b2258f36efaef76a23ba61875f5303fcf8ede2f5d160def35d"));
 
         {
             using IContainer ctx = new ContainerBuilder()
                 .AddModule(new TestNethermindModule(configProvider))
+                .AddSingleton<IFinalizedStateProvider>(manualFinalizedStateProvider)
                 .AddSingleton(blockTree)
                 .Build();
 
-            IWorldState worldState = ctx.Resolve<IWorldStateManager>().GlobalWorldState;
+            IWorldState worldState = ctx.Resolve<IMainProcessingContext>().WorldState;
 
             Hash256 stateRoot;
 

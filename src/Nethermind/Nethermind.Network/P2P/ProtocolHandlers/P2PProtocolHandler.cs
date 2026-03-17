@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using FastEnumUtility;
@@ -34,6 +33,11 @@ public class P2PProtocolHandler(
     ILogManager logManager)
     : ProtocolHandlerBase(session, nodeStatsManager, serializer, backgroundTaskScheduler, logManager), IPingSender, IP2PProtocolHandler
 {
+    /// <summary>
+    /// Maximum size of a base protocol (p2p) message in bytes (2 KiB).
+    /// </summary>
+    public static readonly long BaseProtocolMaxMsgSize = 2.KiB;
+
     private TaskCompletionSource<Packet> _pongCompletionSource;
     private readonly INodeStatsManager _nodeStatsManager = nodeStatsManager ?? throw new ArgumentNullException(nameof(nodeStatsManager));
     private bool _sentHello;
@@ -74,6 +78,8 @@ public class P2PProtocolHandler(
         _supportedCapabilities.Add(capability);
     }
 
+    public override void RegisterWith(ISession session, IProtocolRegistrar registrar) => registrar.Register(session, this);
+
     public override void Init()
     {
         SendHello();
@@ -86,6 +92,14 @@ public class P2PProtocolHandler(
     public override void HandleMessage(Packet msg)
     {
         int size = msg.Data.Length;
+
+        if (size > BaseProtocolMaxMsgSize)
+        {
+            Session.InitiateDisconnect(
+                DisconnectReason.MessageLimitsBreached,
+                $"P2P message too large: {size} bytes, max {BaseProtocolMaxMsgSize} bytes");
+            return;
+        }
 
         switch (msg.PacketType)
         {

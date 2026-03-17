@@ -59,20 +59,6 @@ internal class TaikoForkchoiceUpdatedHandler(
         return true;
     }
 
-    protected override bool IsPayloadAttributesTimestampValid(Block newHeadBlock, ForkchoiceStateV1 forkchoiceState, PayloadAttributes payloadAttributes,
-        [NotNullWhen(false)] out ResultWrapper<ForkchoiceUpdatedV1Result>? errorResult)
-    {
-        if (newHeadBlock.Timestamp > payloadAttributes.Timestamp)
-        {
-            string error = $"Payload timestamp {payloadAttributes.Timestamp} must be greater or equal to head block timestamp {newHeadBlock.Timestamp}.";
-            errorResult = ForkchoiceUpdatedV1Result.Error(error, MergeErrorCodes.InvalidPayloadAttributes);
-            return false;
-        }
-
-        errorResult = null;
-        return true;
-    }
-
     protected override BlockHeader? ValidateBlockHash(ref Hash256 blockHash, out string? errorMessage, bool skipZeroHash = true)
     {
         errorMessage = null;
@@ -89,5 +75,22 @@ internal class TaikoForkchoiceUpdatedHandler(
         }
 
         return blockHeader;
+    }
+
+    // Taiko allows equal timestamps because multiple L2 blocks can be derived
+    // from a single L1 block, all sharing the same L1 anchor timestamp.
+    protected override bool IsPayloadTimestampValid(Block newHeadBlock, PayloadAttributes payloadAttributes)
+        => payloadAttributes.Timestamp >= newHeadBlock.Timestamp;
+
+    protected override bool TryGetBranch(Block newHeadBlock, out Block[] blocks)
+    {
+        // Allow resetting to any block already on the main chain (including genesis)
+        if (_blockTree.IsMainChain(newHeadBlock.Header))
+        {
+            blocks = [newHeadBlock];
+            return true;
+        }
+
+        return base.TryGetBranch(newHeadBlock, out blocks);
     }
 }

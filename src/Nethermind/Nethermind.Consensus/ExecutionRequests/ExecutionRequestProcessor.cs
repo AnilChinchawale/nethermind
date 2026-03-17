@@ -95,10 +95,8 @@ public class ExecutionRequestsProcessor : IExecutionRequestsProcessor
         if (!spec.DepositsEnabled)
             return;
 
-        using ArrayPoolList<byte> depositRequests = new(receipts.Length * 2 + 1)
-        {
-            (byte)ExecutionRequestType.Deposit
-        };
+        using ArrayPoolListRef<byte> depositRequests = new(receipts.Length * 2 + 1);
+        depositRequests.Add((byte)ExecutionRequestType.Deposit);
 
         for (int i = 0; i < receipts.Length; i++)
         {
@@ -124,15 +122,15 @@ public class ExecutionRequestsProcessor : IExecutionRequestsProcessor
 
     private void DecodeDepositRequest(Block block, LogEntry log, Span<byte> buffer)
     {
-        object[] result = null;
+        object[] result;
         try
         {
             result = _abiEncoder.Decode(AbiEncodingStyle.None, DepositEventAbi, log.Data);
             ValidateLayout(result, block);
         }
-        catch (Exception e) when (e is AbiException or OverflowException)
+        catch (AbiException e)
         {
-            throw new InvalidBlockException(block, BlockErrorMessages.InvalidDepositEventLayout(e.Message));
+            throw new InvalidBlockException(block, BlockErrorMessages.InvalidDepositEventLayout(e.Message), e);
         }
 
         int offset = 0;

@@ -1,28 +1,23 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
-using System.Linq;
-using System.Threading.Tasks;
-
 using Nethermind.Blockchain;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
 using Nethermind.Crypto;
-using Nethermind.Db;
+using Nethermind.Logging;
 using Nethermind.Serialization.Rlp;
 using Nethermind.Xdc.Errors;
 using Nethermind.Xdc.Spec;
 using Nethermind.Xdc.Types;
-using System.Collections.Generic;
-using System.Security.Cryptography;
-using System.Text;
-using System.Threading;
+using System;
 using System.Diagnostics.CodeAnalysis;
-using Nethermind.Logging;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace Nethermind.Xdc;
+
 internal class QuorumCertificateManager : IQuorumCertificateManager
 {
     public QuorumCertificateManager(
@@ -40,13 +35,13 @@ internal class QuorumCertificateManager : IQuorumCertificateManager
     }
 
     private IXdcConsensusContext _context { get; }
-    private IBlockTree _blockTree;
+    private readonly IBlockTree _blockTree;
     private IEpochSwitchManager _epochSwitchManager { get; }
 
     private ILogger _logger;
 
     private ISpecProvider _specProvider { get; }
-    private EthereumEcdsa _ethereumEcdsa = new EthereumEcdsa(0);
+    private readonly EthereumEcdsa _ethereumEcdsa = new EthereumEcdsa(0);
     private readonly static VoteDecoder _voteDecoder = new();
 
     public QuorumCertificate HighestKnownCertificate => _context.HighestQC;
@@ -61,7 +56,7 @@ internal class QuorumCertificateManager : IQuorumCertificateManager
 
         var proposedBlockHeader = (XdcBlockHeader)_blockTree.FindHeader(qc.ProposedBlockInfo.Hash);
         if (proposedBlockHeader is null)
-            throw new InvalidBlockException(proposedBlockHeader, "Proposed block header not found in chain");
+            throw new IncomingMessageBlockNotFoundException(qc.ProposedBlockInfo.Hash, qc.ProposedBlockInfo.BlockNumber);
 
         IXdcReleaseSpec spec = _specProvider.GetXdcSpec(proposedBlockHeader, _context.CurrentRound);
 
@@ -106,7 +101,7 @@ internal class QuorumCertificateManager : IQuorumCertificateManager
 
         if (parentHeader.ExtraConsensusData is null)
         {
-            error = $"Block {parentHeader.ToString(BlockHeader.Format.FullHashAndNumber)} does not have required consensus data! Chain migth be corrupt!";
+            error = $"Block {parentHeader.ToString(BlockHeader.Format.FullHashAndNumber)} does not have required consensus data! Chain might be corrupt!";
             return false;
         }
 
@@ -145,7 +140,18 @@ internal class QuorumCertificateManager : IQuorumCertificateManager
         return true;
     }
 
-    public bool VerifyCertificate(QuorumCertificate qc, XdcBlockHeader certificateTarget, out string error)
+    public bool VerifyCertificate(QuorumCertificate qc, [NotNullWhen(false)] out string error)
+    {
+        XdcBlockHeader certificateTarget = (XdcBlockHeader)_blockTree.FindHeader(qc.ProposedBlockInfo.Hash);
+        if (certificateTarget is null)
+        {
+            error = $"Certificate target block not found hash={qc.ProposedBlockInfo.Hash}";
+            return false;
+        }
+        return VerifyCertificate(qc, certificateTarget, out error);
+    }
+
+    public bool VerifyCertificate(QuorumCertificate qc, XdcBlockHeader certificateTarget, [NotNullWhen(false)] out string error)
     {
         if (qc is null)
             throw new ArgumentNullException(nameof(qc));
@@ -166,11 +172,11 @@ internal class QuorumCertificateManager : IQuorumCertificateManager
 
         ulong qcRound = qc.ProposedBlockInfo.Round;
         IXdcReleaseSpec spec = _specProvider.GetXdcSpec(certificateTarget, qcRound);
-        double certThreshold = spec.CertThreshold;
-        double required = Math.Ceiling(epochSwitchInfo.Masternodes.Length * certThreshold);
+        double certificateThreshold = spec.CertificateThreshold;
+        double required = Math.Ceiling(epochSwitchInfo.Masternodes.Length * certificateThreshold);
         if ((qcRound > 0) && (uniqueSignatures.Length < required))
         {
-            error = $"Number of votes ({uniqueSignatures.Length}/{epochSwitchInfo.Masternodes.Length}) does not meet threshold of {certThreshold}";
+            error = $"Number of votes ({uniqueSignatures.Length}/{epochSwitchInfo.Masternodes.Length}) does not meet threshold of {certificateThreshold}";
             return false;
         }
 

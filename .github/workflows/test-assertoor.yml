@@ -21,18 +21,18 @@ jobs:
         private-key: ${{ secrets.APP_PRIVATE_KEY }}
         
     - name: Checkout this repository
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
       with:
         path: main-repo
 
     - name: Checkout assertoor-test repository
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
       with:
         repository: kamilchodola/assertoor-test
         path: assertoor-test
         
     - name: Set up Python
-      uses: actions/setup-python@v6.1.1
+      uses: actions/setup-python@v6
       with:
         python-version: '3.x'
 

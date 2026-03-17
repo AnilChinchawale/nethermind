@@ -37,13 +37,22 @@ public class SimulateReadOnlyBlocksProcessingEnvFactory(
         IReadOnlyDbProvider editableDbProvider = new ReadOnlyDbProvider(dbProvider, true);
         IOverridableEnv overridableEnv = overridableEnvFactory.Create();
 
-        BlockTree tempBlockTree = CreateTempBlockTree(editableDbProvider, specProvider, logManager, editableDbProvider);
+        IHeaderStore mainHeaderStore = new HeaderStore(editableDbProvider.HeadersDb, editableDbProvider.BlockNumbersDb);
+        SimulateDictionaryHeaderStore tmpHeaderStore = new(mainHeaderStore);
+
+        IBlockAccessListStore mainBalStore = new BlockAccessListStore(editableDbProvider.BlockAccessListDb);
+
+        BlockTree tempBlockTree = CreateTempBlockTree(editableDbProvider, specProvider, logManager, editableDbProvider, tmpHeaderStore, mainBalStore);
         BlockTreeOverlay overrideBlockTree = new BlockTreeOverlay(baseBlockTree, tempBlockTree);
 
         ILifetimeScope envLifetimeScope = rootLifetimeScope.BeginLifetimeScope((builder) => builder
             .AddModule(overridableEnv) // worldstate related override here
+            .AddSingleton<IReadOnlyDbProvider>(editableDbProvider)
             .AddSingleton<IBlockTree>(overrideBlockTree)
             .AddSingleton<BlockTreeOverlay>(overrideBlockTree)
+            .AddSingleton<IHeaderStore>(tmpHeaderStore)
+            .AddSingleton<IHeaderFinder>(c => c.Resolve<IHeaderStore>())
+            .AddSingleton<IBlockhashCache, BlockhashCache>()
             .AddModule(validationModules)
             .AddDecorator<IBlockhashProvider, SimulateBlockhashProvider>()
             .AddDecorator<IBlockValidator, SimulateBlockValidatorProxy>()
@@ -55,18 +64,23 @@ public class SimulateReadOnlyBlocksProcessingEnvFactory(
             .AddScoped<SimulateRequestState>()
             .AddScoped<SimulateReadOnlyBlocksProcessingEnv>());
 
+        envLifetimeScope.Disposer.AddInstanceForDisposal(editableDbProvider);
         rootLifetimeScope.Disposer.AddInstanceForAsyncDisposal(envLifetimeScope);
         return envLifetimeScope.Resolve<SimulateReadOnlyBlocksProcessingEnv>();
     }
 
-    private static BlockTree CreateTempBlockTree(IReadOnlyDbProvider readOnlyDbProvider, ISpecProvider? specProvider, ILogManager logManager, IReadOnlyDbProvider editableDbProvider)
+    private static BlockTree CreateTempBlockTree(
+        IReadOnlyDbProvider readOnlyDbProvider,
+        ISpecProvider? specProvider,
+        ILogManager logManager,
+        IReadOnlyDbProvider editableDbProvider,
+        SimulateDictionaryHeaderStore tmpHeaderStore,
+        IBlockAccessListStore tmpBalStore)
     {
-        IBlockStore mainblockStore = new BlockStore(editableDbProvider.BlocksDb);
-        IHeaderStore mainHeaderStore = new HeaderStore(editableDbProvider.HeadersDb, editableDbProvider.BlockNumbersDb);
-        SimulateDictionaryHeaderStore tmpHeaderStore = new(mainHeaderStore);
+        IBlockStore mainBlockStore = new BlockStore(editableDbProvider.BlocksDb);
         const int badBlocksStored = 1;
 
-        SimulateDictionaryBlockStore tmpBlockStore = new(mainblockStore);
+        SimulateDictionaryBlockStore tmpBlockStore = new(mainBlockStore);
         IBadBlockStore badBlockStore = new BadBlockStore(editableDbProvider.BadBlocksDb, badBlocksStored);
 
         return new(tmpBlockStore,
@@ -74,6 +88,7 @@ public class SimulateReadOnlyBlocksProcessingEnvFactory(
             editableDbProvider.BlockInfosDb,
             editableDbProvider.MetadataDb,
             badBlockStore,
+            tmpBalStore,
             new ChainLevelInfoRepository(readOnlyDbProvider.BlockInfosDb),
             specProvider,
             NullBloomStorage.Instance,

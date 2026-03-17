@@ -3,14 +3,11 @@
 
 using System;
 using System.Collections.Generic;
-using System.Configuration;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Autofac;
-using FluentAssertions;
-using Nethermind.Api;
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.Find;
 using Nethermind.Blockchain.Receipts;
@@ -43,7 +40,6 @@ using Nethermind.Network;
 using Nethermind.State;
 using Nethermind.State.Repositories;
 using Nethermind.TxPool;
-using Nethermind.Blockchain.Blocks;
 using Nethermind.Init.Modules;
 
 namespace Nethermind.Core.Test.Blockchain;
@@ -51,7 +47,7 @@ namespace Nethermind.Core.Test.Blockchain;
 public class TestBlockchain : IDisposable
 {
     public const int DefaultTimeout = 10000;
-    protected long TestTimout { get; init; } = DefaultTimeout;
+    protected long TestTimeout { get; init; } = DefaultTimeout;
     public IStateReader StateReader => _fromContainer.StateReader;
     public IEthereumEcdsa EthereumEcdsa => _fromContainer.EthereumEcdsa;
     public INonceManager NonceManager => _fromContainer.NonceManager;
@@ -61,9 +57,11 @@ public class TestBlockchain : IDisposable
     public ITxPool TxPool => _fromContainer.TxPool;
     public IForkInfo ForkInfo => _fromContainer.ForkInfo;
     public IWorldStateManager WorldStateManager => _fromContainer.WorldStateManager;
+    public IWorldState MainWorldState => MainProcessingContext.WorldState;
     public IReadOnlyTxProcessingEnvFactory ReadOnlyTxProcessingEnvFactory => _fromContainer.ReadOnlyTxProcessingEnvFactory;
     public IShareableTxProcessorSource ShareableTxProcessorSource => _fromContainer.ShareableTxProcessorSource;
     public IBranchProcessor BranchProcessor => _fromContainer.MainProcessingContext.BranchProcessor;
+    public IBlockProcessor BlockProcessor => _fromContainer.MainProcessingContext.BlockProcessor;
     public IBlockchainProcessor BlockchainProcessor => _fromContainer.MainProcessingContext.BlockchainProcessor;
     public IBlockProcessingQueue BlockProcessingQueue => _fromContainer.MainProcessingContext.BlockProcessingQueue;
     public IBlockPreprocessorStep BlockPreprocessorStep => _fromContainer.BlockPreprocessorStep;
@@ -100,7 +98,7 @@ public class TestBlockchain : IDisposable
 
     public static readonly DateTime InitialTimestamp = new(2020, 2, 15, 12, 50, 30, DateTimeKind.Utc);
 
-    public static readonly UInt256 InitialValue = 1000.Ether();
+    public static readonly UInt256 InitialValue = 1000.Ether;
 
     public CancellationToken CancellationToken => CreateCancellationSource().Token;
 
@@ -127,7 +125,7 @@ public class TestBlockchain : IDisposable
 
     // Resolving all these component at once is faster.
     protected FromContainer _fromContainer = null!;
-    public class FromContainer(
+    public sealed class FromContainer(
         Lazy<IStateReader> stateReader,
         Lazy<IEthereumEcdsa> ethereumEcdsa,
         Lazy<INonceManager> nonceManager,
@@ -256,8 +254,8 @@ public class TestBlockchain : IDisposable
             .AddSingleton<IUnclesValidator>(Always.Valid)
             .AddSingleton<ISealer>(new NethDevSealEngine(TestItem.AddressD))
 
-            .AddSingleton<IBlockProducer>((_) => this.BlockProducer)
-            .AddSingleton<IBlockProducerRunner>((_) => this.BlockProducerRunner)
+            .AddSingleton<IBlockProducer>((_) => BlockProducer)
+            .AddSingleton<IBlockProducerRunner>((_) => BlockProducerRunner)
 
             .AddSingleton<TestBlockchainUtil.Config, Configuration>((cfg) => new TestBlockchainUtil.Config(cfg.SlotTime))
 
@@ -321,12 +319,14 @@ public class TestBlockchain : IDisposable
             if (specProvider.GenesisSpec.IsBeaconBlockRootAvailable)
             {
                 state.CreateAccount(specProvider.GenesisSpec.Eip4788ContractAddress!, 1);
+                state.InsertCode(Eip4788Constants.BeaconRootsAddress, Eip4788TestConstants.CodeHash, Eip4788TestConstants.Code, specProvider.GenesisSpec);
             }
 
             // Eip2935
-            if (specProvider.GenesisSpec.IsBlockHashInStateAvailable)
+            if (specProvider.GenesisSpec.IsEip2935Enabled)
             {
-                state.CreateAccount(specProvider.GenesisSpec.Eip2935ContractAddress, 1);
+                state.CreateAccount(specProvider.GenesisSpec.Eip2935ContractAddress!, 1);
+                state.InsertCode(Eip2935Constants.BlockHashHistoryAddress, Eip2935TestConstants.CodeHash, Eip2935TestConstants.Code, specProvider.GenesisSpec);
             }
 
             state.CreateAccount(TestItem.AddressA, testConfiguration.AccountInitialValue);
@@ -334,7 +334,7 @@ public class TestBlockchain : IDisposable
             state.CreateAccount(TestItem.AddressC, testConfiguration.AccountInitialValue);
 
             byte[] code = Bytes.FromHexString("0xabcd");
-            state.InsertCode(TestItem.AddressA, code, specProvider.GenesisSpec!);
+            state.InsertCode(TestItem.AddressA, code, specProvider.GenesisSpec);
             state.Set(new StorageCell(TestItem.AddressA, UInt256.One), Bytes.FromHexString("0xabcdef"));
 
             IReleaseSpec? finalSpec = specProvider.GetFinalSpec();
@@ -342,13 +342,13 @@ public class TestBlockchain : IDisposable
             if (finalSpec?.WithdrawalsEnabled is true)
             {
                 state.CreateAccount(Eip7002Constants.WithdrawalRequestPredeployAddress, 0, Eip7002TestConstants.Nonce);
-                state.InsertCode(Eip7002Constants.WithdrawalRequestPredeployAddress, Eip7002TestConstants.CodeHash, Eip7002TestConstants.Code, specProvider.GenesisSpec!);
+                state.InsertCode(Eip7002Constants.WithdrawalRequestPredeployAddress, Eip7002TestConstants.CodeHash, Eip7002TestConstants.Code, specProvider.GenesisSpec);
             }
 
             if (finalSpec?.ConsolidationRequestsEnabled is true)
             {
                 state.CreateAccount(Eip7251Constants.ConsolidationRequestPredeployAddress, 0, Eip7251TestConstants.Nonce);
-                state.InsertCode(Eip7251Constants.ConsolidationRequestPredeployAddress, Eip7251TestConstants.CodeHash, Eip7251TestConstants.Code, specProvider.GenesisSpec!);
+                state.InsertCode(Eip7251Constants.ConsolidationRequestPredeployAddress, Eip7251TestConstants.CodeHash, Eip7251TestConstants.Code, specProvider.GenesisSpec);
             }
 
             BlockBuilder genesisBlockBuilder = Builders.Build.A.Block.Genesis;
@@ -374,6 +374,16 @@ public class TestBlockchain : IDisposable
                 genesisBlockBuilder.WithEmptyRequestsHash();
             }
 
+            if (specProvider.GenesisSpec.BlockLevelAccessListsEnabled)
+            {
+                genesisBlockBuilder.WithBlockAccessListHash(Keccak.OfAnEmptySequenceRlp);
+            }
+
+            if (specProvider.GenesisSpec.IsEip7843Enabled)
+            {
+                genesisBlockBuilder.WithSlotNumber(0);
+            }
+
             Block genesisBlock = genesisBlockBuilder.TestObject;
 
             foreach (IGenesisPostProcessor genesisPostProcessor in postProcessors)
@@ -391,7 +401,7 @@ public class TestBlockchain : IDisposable
 
     protected virtual AutoCancelTokenSource CreateCancellationSource()
     {
-        return AutoCancelTokenSource.ThatCancelAfter(Debugger.IsAttached ? TimeSpan.FromMilliseconds(-1) : TimeSpan.FromMilliseconds(TestTimout));
+        return AutoCancelTokenSource.ThatCancelAfter(Debugger.IsAttached ? TimeSpan.FromMilliseconds(-1) : TimeSpan.FromMilliseconds(TestTimeout));
     }
 
     protected virtual async Task AddBlocksOnStart()
@@ -465,6 +475,11 @@ public class TestBlockchain : IDisposable
         await TestUtil.AddBlockAndWaitForHead(true, CreateCancellationSource().Token, transactions);
     }
 
+    public async Task AddBlockMayHaveExtraTx(params Transaction[] transactions)
+    {
+        await TestUtil.AddBlockMayHaveExtraTx(true, CreateCancellationSource().Token, transactions);
+    }
+
     public async Task AddBlockThroughPoW(params Transaction[] transactions)
     {
         await PoWTestUtil.AddBlockAndWaitForHead(CreateCancellationSource().Token, transactions);
@@ -524,8 +539,8 @@ public class TestBlockchain : IDisposable
             .SignedAndResolved(TestItem.PrivateKeyA)
             .To(address)
             .WithNonce(nonce + index)
-            .WithMaxFeePerGas(20.GWei())
-            .WithMaxPriorityFeePerGas(5.GWei())
+            .WithMaxFeePerGas(20.GWei)
+            .WithMaxPriorityFeePerGas(5.GWei)
             .WithType(TxType.EIP1559)
             .WithValue(ether)
             .WithChainId(MainnetSpecProvider.Instance.ChainId)

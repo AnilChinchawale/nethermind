@@ -105,7 +105,7 @@ public class OptimismPayloadAttributes : PayloadAttributes
         return offset;
     }
 
-    public override PayloadAttributesValidationResult Validate(ISpecProvider specProvider, int apiVersion,
+    public override PayloadAttributesValidationResult Validate(ISpecProvider specProvider, int fcuVersion,
         [NotNullWhen(false)] out string? error)
     {
         if (GasLimit == 0)
@@ -120,10 +120,25 @@ public class OptimismPayloadAttributes : PayloadAttributes
             error = $"{nameof(EIP1559Params)} should be null before Holocene";
             return PayloadAttributesValidationResult.InvalidPayloadAttributes;
         }
-        if (releaseSpec.IsOpHoloceneEnabled && !this.TryDecodeEIP1559Parameters(out _, out var decodeError))
+        if (releaseSpec.IsOpHoloceneEnabled)
         {
-            error = decodeError;
-            return PayloadAttributesValidationResult.InvalidPayloadAttributes;
+            if (!this.TryDecodeEIP1559Parameters(out EIP1559Parameters parameters, out var decodeError))
+            {
+                error = decodeError;
+                return PayloadAttributesValidationResult.InvalidPayloadAttributes;
+            }
+
+            (int version, string reason) versionCheck = parameters switch
+            {
+                // Newer forks should be added on top
+                _ when releaseSpec.IsOpJovianEnabled => (1, "since Jovian"),
+                _ => (0, "before Jovian")
+            };
+            if (versionCheck.version != parameters.Version)
+            {
+                error = $"{nameof(EIP1559Params)} version should be {versionCheck.version} {versionCheck.reason}";
+                return PayloadAttributesValidationResult.InvalidPayloadAttributes;
+            }
         }
 
         try
@@ -135,7 +150,7 @@ public class OptimismPayloadAttributes : PayloadAttributes
             error = $"Error decoding transactions: {e}";
             return PayloadAttributesValidationResult.InvalidPayloadAttributes;
         }
-        return base.Validate(specProvider, apiVersion, out error);
+        return base.Validate(specProvider, fcuVersion, out error);
     }
 
     public override string ToString()

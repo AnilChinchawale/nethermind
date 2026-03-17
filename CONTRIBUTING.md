@@ -44,6 +44,7 @@ Please do not:
 - **DON'T** surprise us with big pull requests. Instead, file an issue and start a discussion so we can agree on a direction before you invest a significant amount of time.
 - **DON'T** commit code that you didn't write. If you find code you think is a good fit to add to Nethermind, file an issue and start a discussion before proceeding.
 - **DON'T** submit PRs that alter licensing-related files or headers. If you believe there's a problem with them, file an issue, and we'll be happy to discuss it.
+- **DON'T** submit PRs that modify infrastructure components (e.g., GitHub Actions workflows or CI/CD scripts). If such changes are required to support your main contribution, include a brief justification, and they will be considered during review.
 
 ### Branch naming
 
@@ -59,7 +60,7 @@ Branch names must follow the `kebab-case` or `snake_case` pattern and be all low
 The following notice must be included as a header in all source files if possible.
 
 ```
-// SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
+// SPDX-FileCopyrightText: 2026 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 ```
 

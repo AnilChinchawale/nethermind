@@ -5,11 +5,12 @@ using Nethermind.Xdc.Types;
 using System;
 
 namespace Nethermind.Xdc;
+
 public interface IXdcConsensusContext
 {
     ulong CurrentRound { get; }
     BlockRoundInfo HighestCommitBlock { get; set; }
-    QuorumCertificate? HighestQC { get; set; }
+    QuorumCertificate HighestQC { get; set; }
     TimeoutCertificate? HighestTC { get; set; }
     QuorumCertificate? LockQC { get; set; }
     int TimeoutCounter { get; set; }

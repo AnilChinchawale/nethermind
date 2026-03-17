@@ -8,6 +8,8 @@ using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
 using Nethermind.Crypto;
 using Nethermind.Serialization.Rlp;
+using Nethermind.Synchronization.Peers;
+using Nethermind.Xdc.P2P;
 using Nethermind.Xdc.Spec;
 using Nethermind.Xdc.Types;
 using System;
@@ -20,6 +22,7 @@ namespace Nethermind.Xdc;
 
 internal class VotesManager(
     IXdcConsensusContext context,
+    ISyncPeerPool syncPeerPool,
     IBlockTree tree,
     IEpochSwitchManager epochSwitchManager,
     ISnapshotManager snapshotManager,
@@ -28,6 +31,7 @@ internal class VotesManager(
     ISigner signer,
     IForensicsProcessor? forensicsProcessor = null) : IVotesManager
 {
+<<<<<<< HEAD
     private IBlockTree _blockTree = tree;
     private IEpochSwitchManager _epochSwitchManager = epochSwitchManager;
     private ISnapshotManager _snapshotManager = snapshotManager;
@@ -36,10 +40,21 @@ internal class VotesManager(
     private IForensicsProcessor? _forensicsProcessor = forensicsProcessor;
     private ISpecProvider _specProvider = specProvider;
     private ISigner _signer = signer;
+=======
+    private readonly IBlockTree _blockTree = tree;
+    private readonly IEpochSwitchManager _epochSwitchManager = epochSwitchManager;
+    private readonly ISnapshotManager _snapshotManager = snapshotManager;
+    private readonly IQuorumCertificateManager _quorumCertificateManager = quorumCertificateManager;
+    private readonly IXdcConsensusContext _ctx = context;
+    private readonly ISyncPeerPool _syncPeerPool = syncPeerPool;
+    private readonly IForensicsProcessor _forensicsProcessor = forensicsProcessor;
+    private readonly ISpecProvider _specProvider = specProvider;
+    private readonly ISigner _signer = signer;
+>>>>>>> upstream/master
 
-    private XdcPool<Vote> _votePool = new();
-    private static VoteDecoder _voteDecoder = new();
-    private static EthereumEcdsa _ethereumEcdsa = new(0);
+    private readonly XdcPool<Vote> _votePool = new();
+    private static readonly VoteDecoder _voteDecoder = new();
+    private static readonly EthereumEcdsa _ethereumEcdsa = new(0);
     private readonly ConcurrentDictionary<ulong, byte> _qcBuildStartedByRound = new();
     private const int _maxBlockDistance = 7; // Maximum allowed backward distance from the chain head
     private long _highestVotedRound = -1;
@@ -59,14 +74,13 @@ internal class VotesManager(
         long epochSwitchNumber = epochSwitchInfo.EpochSwitchBlockInfo.BlockNumber;
         long gapNumber = epochSwitchNumber == 0 ? 0 : Math.Max(0, epochSwitchNumber - epochSwitchNumber % spec.EpochLength - spec.Gap);
 
-        var vote = new Vote(blockInfo, (ulong)gapNumber);
+        var vote = new Vote(blockInfo, (ulong)gapNumber, isMyVote: true);
         // Sets signature and signer for the vote
         Sign(vote);
 
         _highestVotedRound = (long)blockInfo.Round;
 
         HandleVote(vote);
-        //TODO Broadcast vote to peers
         return Task.CompletedTask;
     }
 
@@ -100,20 +114,24 @@ internal class VotesManager(
             //Unknown epoch switch info, cannot process vote
             return Task.CompletedTask;
         }
-        if (epochInfo.Masternodes.Length == 0)
+        int masternodeCount = epochInfo.Masternodes.Length;
+        if (masternodeCount == 0)
         {
             throw new InvalidOperationException($"Epoch has empty master node list for {vote.ProposedBlockInfo.Hash}");
         }
 
-        double certThreshold = _specProvider.GetXdcSpec(proposedHeader, vote.ProposedBlockInfo.Round).CertThreshold;
-        bool thresholdReached = roundVotes.Count >= epochInfo.Masternodes.Length * certThreshold;
+        BroadcastVote(vote);
+
+        double certThreshold = _specProvider.GetXdcSpec(proposedHeader, vote.ProposedBlockInfo.Round).CertificateThreshold;
+        double requiredVotes = masternodeCount * certThreshold;
+        bool thresholdReached = roundVotes.Count >= requiredVotes;
         if (thresholdReached)
         {
             if (!vote.ProposedBlockInfo.ValidateBlockInfo(proposedHeader))
                 return Task.CompletedTask;
 
             Signature[] validSignatures = GetValidSignatures(roundVotes, epochInfo.Masternodes);
-            if (validSignatures.Length < epochInfo.Masternodes.Length * certThreshold)
+            if (validSignatures.Length < requiredVotes)
                 return Task.CompletedTask;
 
             // At this point, the QC should be processed for this *round*.
@@ -126,7 +144,7 @@ internal class VotesManager(
         return Task.CompletedTask;
     }
 
-    private void EndRound(ulong round)
+    private void CleanupVotes(ulong round)
     {
         _votePool.EndRound(round);
 
@@ -178,7 +196,7 @@ internal class VotesManager(
 
         if (FilterVote(vote))
         {
-            //TODO: Broadcast Vote
+
             return HandleVote(vote);
         }
         return Task.CompletedTask;
@@ -188,18 +206,27 @@ internal class VotesManager(
     {
         if (vote.ProposedBlockInfo.Round < _ctx.CurrentRound) return false;
 
-        Snapshot snapshot = _snapshotManager.GetSnapshotByGapNumber(vote.GapNumber);
+        Snapshot snapshot = _snapshotManager.GetSnapshotByGapNumber((long)vote.GapNumber);
         if (snapshot is null) return false;
         // Verify message signature
         vote.Signer ??= _ethereumEcdsa.RecoverVoteSigner(vote);
         return snapshot.NextEpochCandidates.Any(x => x == vote.Signer);
     }
 
+    private void BroadcastVote(Vote vote)
+    {
+        foreach (PeerInfo peer in _syncPeerPool.AllPeers)
+        {
+            if (peer.SyncPeer is XdcProtocolHandler xdcProtocol)
+                xdcProtocol.SendVote(vote);
+        }
+    }
+
     private void OnVotePoolThresholdReached(Signature[] validSignatures, Vote currVote)
     {
         QuorumCertificate qc = new(currVote.ProposedBlockInfo, validSignatures, currVote.GapNumber);
         _quorumCertificateManager.CommitCertificate(qc);
-        EndRound(currVote.ProposedBlockInfo.Round);
+        CleanupVotes(currVote.ProposedBlockInfo.Round);
     }
 
     private bool IsExtendingFromAncestor(Hash256 blockHash, long blockNumber, BlockRoundInfo ancestorBlockInfo)

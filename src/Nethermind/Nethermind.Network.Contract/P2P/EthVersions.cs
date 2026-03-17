@@ -13,5 +13,9 @@ public static class EthVersions
     public const byte Eth67 = 67;
     public const byte Eth68 = 68;
     public const byte Eth69 = 69;
+<<<<<<< HEAD
     public const byte Eth100 = 100;
+=======
+    public const byte Eth70 = 70;
+>>>>>>> upstream/master
 }

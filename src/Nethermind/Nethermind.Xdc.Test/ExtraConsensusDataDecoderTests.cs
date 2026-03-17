@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using System;
 using FluentAssertions;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
@@ -10,6 +11,8 @@ using Nethermind.Xdc.Types;
 using NUnit.Framework;
 
 namespace Nethermind.Xdc.Test;
+
+[Parallelizable(ParallelScope.All)]
 internal class ExtraConsensusDataDecoderTests
 {
     [TestCase("0xec01eae5a02671d34ee512c8a06f194dca9801ecfa8eb6a3590d1b73e50666b07f53b8958180820384c08201c2")]
@@ -22,7 +25,7 @@ internal class ExtraConsensusDataDecoderTests
 
         Rlp encodedExtraData = decoder.Encode(decodedExtraData);
 
-        ExtraFieldsV2 unencoded = decoder.Decode(new RlpStream(encodedExtraData.Bytes));
+        ExtraFieldsV2 unencoded = decoder.Decode((ReadOnlySpan<byte>)encodedExtraData.Bytes);
 
         unencoded.Should().BeEquivalentTo(decodedExtraData);
     }
@@ -39,8 +42,8 @@ internal class ExtraConsensusDataDecoderTests
         ExtraFieldsV2 decodedExtraData;
         if (useRlpStream)
         {
-            stream.Position = 0;
-            decodedExtraData = decoder.Decode(stream);
+            Rlp.ValueDecoderContext context = new Rlp.ValueDecoderContext(stream.Data);
+            decodedExtraData = decoder.Decode(ref context);
         }
         else
         {
@@ -59,7 +62,7 @@ internal class ExtraConsensusDataDecoderTests
 
         Rlp encodedExtraData = decoder.Encode(extraFieldsV2);
 
-        ExtraFieldsV2 unencoded = decoder.Decode(new RlpStream(encodedExtraData.Bytes));
+        ExtraFieldsV2 unencoded = decoder.Decode((ReadOnlySpan<byte>)encodedExtraData.Bytes);
 
         unencoded.Should().BeEquivalentTo(extraFieldsV2);
     }

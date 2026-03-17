@@ -32,18 +32,14 @@ namespace Nethermind.Trie
 #endif
 
         private static readonly object _nullNode = new();
-        private static readonly TrieNodeDecoder _nodeDecoder = new();
         private static readonly AccountDecoder _accountDecoder = new();
-
-        private static readonly Action<TrieNode, Hash256?, TreePath> _markPersisted = static (tn, _, _) =>
-            tn.IsPersisted = true;
 
         private const byte _dirtyMask = 0b001;
         private const byte _persistedMask = 0b010;
         private const byte _boundaryProof = 0b100;
 
         private byte _blockAndFlags = 0;
-        private SpanSource _rlp;
+        private CappedArray<byte> _rlp;
         private INodeData? _nodeData;
 
         /// <summary>
@@ -115,13 +111,13 @@ namespace Nethermind.Trie
 
         public bool HasRlp => _rlp.IsNotNull;
 
-        public SpanSource FullRlp => _rlp;
+        public CappedArray<byte> FullRlp => _rlp;
 
         public ValueRlpStream RlpStream
         {
             get
             {
-                SpanSource rlp = _rlp;
+                CappedArray<byte> rlp = _rlp;
                 return rlp.IsNull ? default : new ValueRlpStream(rlp);
             }
         }
@@ -175,7 +171,7 @@ namespace Nethermind.Trie
             }
         }
 
-        public SpanSource Value
+        public CappedArray<byte> Value
         {
             get
             {
@@ -185,7 +181,7 @@ namespace Nethermind.Trie
                 }
 
                 // branches that we use for state will never have value set as all the keys are equal length
-                return SpanSource.Empty;
+                return CappedArray<byte>.Empty;
             }
             set
             {
@@ -196,8 +192,8 @@ namespace Nethermind.Trie
 
                 if (IsSealed)
                 {
-                    SpanSource current = leafData.Value;
-                    if ((current.IsNull && value.IsNull) || (!current.IsNull && !value.IsNull && current.Equals(value)))
+                    CappedArray<byte> current = leafData.Value;
+                    if ((current.IsNull && value.IsNull) || (!current.IsNull && !value.IsNull && current.AsSpan().SequenceEqual(value.AsSpan())))
                     {
                         // No change, parallel read
                         return;
@@ -241,7 +237,7 @@ namespace Nethermind.Trie
                     }
                 }
 
-                return nonEmptyNodes > 2;
+                return false;
             }
         }
 
@@ -273,7 +269,7 @@ namespace Nethermind.Trie
             }
         }
 
-        public TrieNode(NodeType nodeType, SpanSource rlp, bool isDirty = false)
+        public TrieNode(NodeType nodeType, CappedArray<byte> rlp, bool isDirty = false)
         {
             if (isDirty)
             {
@@ -285,17 +281,17 @@ namespace Nethermind.Trie
             _rlp = rlp;
         }
 
-        public TrieNode(NodeType nodeType, byte[]? rlp, bool isDirty = false) : this(nodeType, new SpanSource(rlp),
+        public TrieNode(NodeType nodeType, byte[]? rlp, bool isDirty = false) : this(nodeType, new CappedArray<byte>(rlp),
             isDirty)
         {
         }
 
         public TrieNode(NodeType nodeType, Hash256 keccak, ReadOnlySpan<byte> rlp)
-            : this(nodeType, keccak, new SpanSource(rlp.ToArray()))
+            : this(nodeType, keccak, new CappedArray<byte>(rlp.ToArray()))
         {
         }
 
-        public TrieNode(NodeType nodeType, Hash256 keccak, SpanSource rlp)
+        public TrieNode(NodeType nodeType, Hash256 keccak, CappedArray<byte> rlp)
             : this(nodeType, rlp)
         {
             Keccak = keccak;
@@ -320,7 +316,7 @@ namespace Nethermind.Trie
         {
 #if DEBUG
             return
-                $"[{NodeType}({(FullRlp.IsNotNullOrEmpty ? FullRlp.Length : 0)}){(FullRlp.IsNotNullOrEmpty && FullRlp.Length < 32 ? $"{FullRlp.Span.ToHexString()}" : "")}" +
+                $"[{NodeType}({(FullRlp.IsNotNullOrEmpty ? FullRlp.Length : 0)}){(FullRlp.IsNotNullOrEmpty && FullRlp.Length < 32 ? $"{FullRlp.AsSpan().ToHexString()}" : "")}" +
                 $"|{Id}|{Keccak}|D:{IsDirty}|S:{IsSealed}|P:{IsPersisted}|";
 #else
             return $"[{NodeType}({(FullRlp.IsNotNullOrEmpty ? FullRlp.Length : 0)})|{Keccak?.ToShortString()}|D:{IsDirty}|S:{IsSealed}|P:{IsPersisted}|";
@@ -355,7 +351,7 @@ namespace Nethermind.Trie
         internal void ResolveUnknownNode(ITrieNodeResolver tree, in TreePath path, ReadFlags readFlags = ReadFlags.None,
             ICappedArrayPool? bufferPool = null)
         {
-            SpanSource rlp = _rlp;
+            CappedArray<byte> rlp = _rlp;
             if (rlp.IsNull)
             {
                 Hash256 keccak = Keccak;
@@ -371,7 +367,7 @@ namespace Nethermind.Trie
                     ThrowNullRlp();
                 }
 
-                _rlp = rlp = new SpanSource(fullRlp);
+                _rlp = rlp = new CappedArray<byte>(fullRlp);
                 IsPersisted = true;
             }
 
@@ -396,7 +392,7 @@ namespace Nethermind.Trie
             void ThrowUnexpectedNumberOfItems(int numberOfItems, in TreePath path)
             {
                 throw new TrieNodeException(
-                    $"Unexpected number of items = {numberOfItems} when decoding a node from RLP ({FullRlp.Span.ToHexString()})",
+                    $"Unexpected number of items = {numberOfItems} when decoding a node from RLP ({FullRlp.AsSpan().ToHexString()})",
                     path, Keccak ?? Nethermind.Core.Crypto.Keccak.Zero);
             }
         }
@@ -409,7 +405,7 @@ namespace Nethermind.Trie
         {
             try
             {
-                SpanSource rlp = _rlp;
+                CappedArray<byte> rlp = _rlp;
                 if (NodeType == NodeType.Unknown)
                 {
                     if (rlp.IsNull)
@@ -427,7 +423,7 @@ namespace Nethermind.Trie
                             return false;
                         }
 
-                        _rlp = rlp = new SpanSource(fullRlp);
+                        _rlp = rlp = new CappedArray<byte>(fullRlp);
                         IsPersisted = true;
                     }
                 }
@@ -468,8 +464,8 @@ namespace Nethermind.Trie
                 if (isLeaf)
                 {
                     valueSpan = rlpStream.DecodeByteArraySpan();
-                    SpanSource buffer = bufferPool.SafeRentBuffer(valueSpan.Length);
-                    valueSpan.CopyTo(buffer.Span);
+                    CappedArray<byte> buffer = bufferPool.SafeRent(valueSpan.Length);
+                    valueSpan.CopyTo(buffer.AsSpan());
                     _nodeData = new LeafData(key, buffer);
                 }
                 else
@@ -499,18 +495,18 @@ namespace Nethermind.Trie
             ICappedArrayPool? bufferPool = null, bool canBeParallel = true)
         {
             bool isRoot = path.Length == 0;
-            SpanSource rlp = _rlp;
+            CappedArray<byte> rlp = _rlp;
             if (rlp.IsNull || IsDirty)
             {
-                SpanSource oldRlp = rlp.IsNotNull ? rlp : SpanSource.Empty;
-                SpanSource fullRlp = NodeType == NodeType.Branch
+                CappedArray<byte> oldRlp = rlp.IsNotNull ? rlp : CappedArray<byte>.Empty;
+                CappedArray<byte> fullRlp = NodeType == NodeType.Branch
                     ? TrieNodeDecoder.RlpEncodeBranch(this, tree, ref path, bufferPool,
                         canBeParallel: isRoot && canBeParallel)
                     : RlpEncode(tree, ref path, bufferPool);
 
                 if (oldRlp.IsNotNullOrEmpty)
                 {
-                    bufferPool.SafeReturnBuffer(oldRlp);
+                    bufferPool.SafeReturn(oldRlp);
                 }
 
                 _rlp = rlp = fullRlp;
@@ -522,13 +518,13 @@ namespace Nethermind.Trie
             if (rlp.Length >= 32 || isRoot)
             {
                 Metrics.TreeNodeHashCalculations++;
-                return Nethermind.Core.Crypto.Keccak.Compute(rlp.Span);
+                return Nethermind.Core.Crypto.Keccak.Compute(rlp.AsSpan());
             }
 
             return null;
         }
 
-        internal SpanSource RlpEncode(ITrieNodeResolver tree, ref TreePath path, ICappedArrayPool? bufferPool = null)
+        internal CappedArray<byte> RlpEncode(ITrieNodeResolver tree, ref TreePath path, ICappedArrayPool? bufferPool = null)
         {
             return NodeType switch
             {
@@ -540,7 +536,7 @@ namespace Nethermind.Trie
             };
 
             [DoesNotReturn, StackTraceHidden]
-            static SpanSource ThrowUnhandledNodeType(TrieNode item)
+            static CappedArray<byte> ThrowUnhandledNodeType(TrieNode item)
             {
                 throw new TrieException($"An attempt was made to encode a trie node of type {item.NodeType}");
             }
@@ -548,7 +544,7 @@ namespace Nethermind.Trie
 
         public Hash256? GetChildHash(int i)
         {
-            SpanSource rlp = _rlp;
+            CappedArray<byte> rlp = _rlp;
             if (rlp.IsNull)
             {
                 return null;
@@ -563,7 +559,7 @@ namespace Nethermind.Trie
         /// Gets child hash or the Value of the node in case it's an inline.
         public byte[]? GetChildHashOrInlineValue(int i)
         {
-            SpanSource rlp = _rlp;
+            CappedArray<byte> rlp = _rlp;
             if (rlp.IsNull)
             {
                 return null;
@@ -595,10 +591,33 @@ namespace Nethermind.Trie
             }
         }
 
+        public byte[]? GetInlineNodeRlp(int i)
+        {
+            CappedArray<byte> rlp = _rlp;
+            if (rlp.IsNull)
+            {
+                return null;
+            }
+
+            ValueRlpStream rlpStream = new(rlp);
+            SeekChild(ref rlpStream, i);
+
+            int prefixValue = rlpStream.PeekByte();
+            if (prefixValue < 192)
+            {
+                return null;
+            }
+            else
+            {
+                int length = rlpStream.PeekNextRlpLength();
+                return rlpStream.Read(length).ToArray();
+            }
+        }
+
         public bool GetChildHashAsValueKeccak(int i, out ValueHash256 keccak)
         {
             Unsafe.SkipInit(out keccak);
-            SpanSource rlp = _rlp;
+            CappedArray<byte> rlp = _rlp;
             if (rlp.IsNull)
             {
                 return false;
@@ -622,7 +641,7 @@ namespace Nethermind.Trie
                 ThrowNotABranch();
             }
 
-            SpanSource rlp = _rlp;
+            CappedArray<byte> rlp = _rlp;
             ref var data = ref _nodeData[i];
             if (rlp.IsNotNull && data is null)
             {
@@ -641,7 +660,7 @@ namespace Nethermind.Trie
             }
         }
 
-        public bool IsChildDirty(int i)
+        public bool TryGetDirtyChild(int i, [NotNullWhen(true)] out TrieNode? dirtyChild)
         {
             if (IsExtension)
             {
@@ -651,20 +670,24 @@ namespace Nethermind.Trie
             ref var data = ref _nodeData[i];
             if (data is null)
             {
+                dirtyChild = null;
                 return false;
             }
 
             if (ReferenceEquals(data, _nullNode))
             {
+                dirtyChild = null;
                 return false;
             }
 
             if (data is Hash256)
             {
+                dirtyChild = null;
                 return false;
             }
 
-            return ((TrieNode)data)!.IsDirty;
+            dirtyChild = (TrieNode)data;
+            return dirtyChild.IsDirty;
         }
 
         public TrieNode? this[int i]
@@ -703,7 +726,7 @@ namespace Nethermind.Trie
             return childNode;
         }
 
-        public TrieNode? GetChildWithChildPath(ITrieNodeResolver tree, ref TreePath childPath, int childIndex)
+        public TrieNode? GetChildWithChildPath(ITrieNodeResolver tree, ref TreePath childPath, int childIndex, bool keepChildRef = false)
         {
             /* extensions store value before the child while branches store children before the value
              * so just to treat them in the same way we update index on extensions
@@ -732,10 +755,10 @@ namespace Nethermind.Trie
             }
 
             // pruning trick so we never store long persisted paths
-            // Dont unresolve node of path length <= 4. there should be a relatively small number of these, enough to fit
+            // Don't unresolve nodes with path length <= 4; there should be relatively few and they should fit
             // in RAM, but they are hit quite a lot, and don't have very good data locality.
             // That said, in practice, it does nothing notable, except for significantly improving benchmark score.
-            if (child?.IsPersisted == true && childPath.Length > 4 && childPath.Length % 2 == 0)
+            if (child?.IsPersisted == true && !keepChildRef && childPath.Length > 4 && childPath.Length % 2 == 0)
             {
                 UnresolveChild(childIndex);
             }
@@ -747,7 +770,7 @@ namespace Nethermind.Trie
             {
                 bool isKeccakCalculated = Keccak is not null && FullRlp.IsNotNull;
                 bool isKeccakCorrect =
-                    isKeccakCalculated && Keccak == Nethermind.Core.Crypto.Keccak.Compute(FullRlp.Span);
+                    isKeccakCalculated && Keccak == Nethermind.Core.Crypto.Keccak.Compute(FullRlp.AsSpan());
                 throw new TrieException(
                     $"Unexpected type found at position {childIndex} of {this} with {nameof(_nodeData)} of length {_nodeData?.Length}. Expected a {nameof(TrieNode)} or {nameof(Keccak)} but found {childOrRef?.GetType()} with a value of {childOrRef}. Keccak calculated? : {isKeccakCalculated}; Keccak correct? : {isKeccakCorrect}");
             }
@@ -795,7 +818,7 @@ namespace Nethermind.Trie
         public long GetMemorySize(bool recursive)
         {
             int keccakSize = Keccak is null ? MemorySizes.RefSize : MemorySizes.RefSize + Hash256.MemorySize;
-            long rlpSize = _rlp.MemorySize;
+            long rlpSize = MemorySizes.RefSize + (_rlp.IsNotNull ? MemorySizes.ArrayOverhead + _rlp.UnderlyingLength : 0);
             long dataSize = MemorySizes.RefSize + (_nodeData?.MemorySize ?? 0);
             int objectOverhead = MemorySizes.ObjectHeaderMethodTable;
             int blockAndFlagsSize = sizeof(long);
@@ -849,7 +872,7 @@ namespace Nethermind.Trie
         {
             TrieNode trieNode = new(this);
 
-            SpanSource rlp = _rlp;
+            CappedArray<byte> rlp = _rlp;
             if (rlp.IsNotNull)
             {
                 trieNode._rlp = rlp;
@@ -858,14 +881,14 @@ namespace Nethermind.Trie
             return trieNode;
         }
 
-        public TrieNode CloneWithChangedValue(SpanSource changedValue)
+        public TrieNode CloneWithChangedValue(CappedArray<byte> changedValue)
         {
             TrieNode trieNode = Clone();
             trieNode.Value = changedValue;
             return trieNode;
         }
 
-        public TrieNode CloneWithChangedKeyAndValue(byte[] key, SpanSource changedValue)
+        public TrieNode CloneWithChangedKeyAndValue(byte[] key, CappedArray<byte> changedValue)
         {
             TrieNode trieNode = Clone();
             trieNode.Key = key;
@@ -1146,7 +1169,7 @@ namespace Nethermind.Trie
             // else
             // {
             //     // we assume that the storage root will get resolved during persistence even if not persisted yet
-            //     // if this is not true then the code above that is commented out would be critical to call isntead
+            //     // if this is not true then the code above that is commented out would be critical to call instead
             //     _storageRoot = null;
             // }
         }
@@ -1165,7 +1188,7 @@ namespace Nethermind.Trie
                 }
                 else if (Value.Length > 64) // if not a storage leaf
                 {
-                    Rlp.ValueDecoderContext valueContext = Value.Span.AsRlpValueContext();
+                    Rlp.ValueDecoderContext valueContext = Value.AsSpan().AsRlpValueContext();
                     Hash256 storageRootKey = _accountDecoder.DecodeStorageRootOnly(ref valueContext);
                     if (storageRootKey != Nethermind.Core.Crypto.Keccak.EmptyTreeHash)
                     {
@@ -1220,7 +1243,7 @@ namespace Nethermind.Trie
         private object? ResolveChildWithChildPath(ITrieNodeResolver tree, ref TreePath childPath, int i)
         {
             object? childOrRef;
-            SpanSource rlp = _rlp;
+            CappedArray<byte> rlp = _rlp;
             ref var data = ref _nodeData[i];
             if (rlp.IsNull)
             {
@@ -1252,12 +1275,6 @@ namespace Nethermind.Trie
                                 TrieNode child = tree.FindCachedOrUnknown(childPath, keccak);
                                 data = childOrRef = child;
 
-                                if (IsPersisted && !child.IsPersisted)
-                                {
-                                    child.CallRecursively(_markPersisted, null, ref childPath, tree, false,
-                                        NullLogger.Instance);
-                                }
-
                                 break;
                             }
                         default:
@@ -1285,7 +1302,7 @@ namespace Nethermind.Trie
         internal int ResolveAllChildBranch(ITrieNodeResolver tree, ref TreePath path, Span<TrieNode?> output)
         {
             int chCount = 0;
-            SpanSource rlp = _rlp;
+            CappedArray<byte> rlp = _rlp;
             if (rlp.IsNull)
             {
                 path.AppendMut(0);
@@ -1389,7 +1406,7 @@ namespace Nethermind.Trie
             private object? ResolveChildWithChildPath(ITrieNodeResolver tree, ref TreePath childPath, int i)
             {
                 object? childOrRef;
-                SpanSource rlp = node._rlp;
+                CappedArray<byte> rlp = node._rlp;
                 ref var data = ref node._nodeData[i];
                 if (rlp.IsNull)
                 {
@@ -1444,12 +1461,6 @@ namespace Nethermind.Trie
                                     TrieNode child = tree.FindCachedOrUnknown(childPath, keccak);
                                     data = childOrRef = child;
 
-                                    if (node.IsPersisted && !child.IsPersisted)
-                                    {
-                                        child.CallRecursively(_markPersisted, null, ref childPath, tree, false,
-                                            NullLogger.Instance);
-                                    }
-
                                     break;
                                 }
                             default:
@@ -1496,7 +1507,7 @@ namespace Nethermind.Trie
                 }
 
                 // pruning trick so we never store long persisted paths
-                // Dont unresolve node of path length <= 4. there should be a relatively small number of these, enough to fit
+                // Don't unresolve nodes with path length <= 4; there should be relatively few and they should fit
                 // in RAM, but they are hit quite a lot, and don't have very good data locality.
                 // That said, in practice, it does nothing notable, except for significantly improving benchmark score.
                 if (child?.IsPersisted == true && childPath.Length > 4 && childPath.Length % 2 == 0)
@@ -1511,7 +1522,7 @@ namespace Nethermind.Trie
                 {
                     bool isKeccakCalculated = @this.Keccak is not null && @this.FullRlp.IsNotNull;
                     bool isKeccakCorrect =
-                        isKeccakCalculated && @this.Keccak == Nethermind.Core.Crypto.Keccak.Compute(@this.FullRlp.Span);
+                        isKeccakCalculated && @this.Keccak == Nethermind.Core.Crypto.Keccak.Compute(@this.FullRlp.AsSpan());
                     throw new TrieException(
                         $"Unexpected type found at position {childIndex} of {@this} with {nameof(_nodeData)} of length {@this._nodeData?.Length}. Expected a {nameof(TrieNode)} or {nameof(Keccak)} but found {childOrRef?.GetType()} with a value of {childOrRef}. Keccak calculated? : {isKeccakCalculated}; Keccak correct? : {isKeccakCorrect}");
                 }

@@ -13,10 +13,11 @@ using System;
 using System.Linq;
 
 namespace Nethermind.Xdc;
-internal class XdcSealValidator(ISnapshotManager snapshotManager, IEpochSwitchManager epochSwitchManager, ISpecProvider specProvider) : ISealValidator
+
+internal class XdcSealValidator(IMasternodesCalculator masternodesCalculator, IEpochSwitchManager epochSwitchManager, ISpecProvider specProvider) : ISealValidator
 {
-    private EthereumEcdsa _ethereumEcdsa = new(0); //Ignore chainId since we don't sign transactions here
-    private XdcHeaderDecoder _headerDecoder = new();
+    private readonly EthereumEcdsa _ethereumEcdsa = new(0); //Ignore chainId since we don't sign transactions here
+    private readonly XdcHeaderDecoder _headerDecoder = new();
 
     public bool ValidateParams(BlockHeader parent, BlockHeader header, bool isUncle = false)
     {
@@ -64,7 +65,7 @@ internal class XdcSealValidator(ISnapshotManager snapshotManager, IEpochSwitchMa
             }
 
             //TODO init masternodes by reading from most recent checkpoint
-            (masternodes, var penaltiesAddresses) = snapshotManager.CalculateNextEpochMasternodes(xdcHeader.Number, xdcHeader.ParentHash, xdcSpec);
+            (masternodes, var penaltiesAddresses) = masternodesCalculator.CalculateNextEpochMasternodes(xdcHeader.Number, xdcHeader.ParentHash, xdcSpec);
             if (!xdcHeader.ValidatorsAddress.SequenceEqual(masternodes))
             {
                 error = "Validators does not match what's stored in snapshot minus its penalty.";
@@ -114,7 +115,8 @@ internal class XdcSealValidator(ISnapshotManager snapshotManager, IEpochSwitchMa
     {
         if (header is not XdcBlockHeader xdcHeader)
             throw new ArgumentException($"Only type of {nameof(XdcBlockHeader)} is allowed, but got type {header.GetType().Name}.", nameof(header));
-
+        if (xdcHeader.Number == 0)
+            return true;
         if (header.Author is null)
         {
             if (xdcHeader.Validator is null

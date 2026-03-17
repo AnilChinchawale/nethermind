@@ -3,8 +3,6 @@
 
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json.Serialization;
-
 using Ethereum.Test.Base;
 using Nethermind.Core.Extensions;
 
@@ -16,7 +14,7 @@ namespace Ethereum.HexPrefix.Test
     public class HexPrefixTests
     {
         // ReSharper disable once MemberCanBePrivate.Global
-        // used as a test case source, hasbe public
+        // used as a test case source, has to be public
         public static IEnumerable<HexPrefixTest> LoadTests()
         {
             return TestLoader.LoadFromFile<Dictionary<string, HexPrefixTestJson>, HexPrefixTest>(
@@ -44,20 +42,12 @@ namespace Ethereum.HexPrefix.Test
             public string Out { get; set; }
         }
 
-        public class HexPrefixTest
+        public class HexPrefixTest(string name, byte[] sequence, bool isTerm, string output)
         {
-            public HexPrefixTest(string name, byte[] sequence, bool isTerm, string output)
-            {
-                Name = name;
-                Sequence = sequence;
-                IsTerm = isTerm;
-                Output = output;
-            }
-
-            public string Name { get; }
-            public byte[] Sequence { get; }
-            public bool IsTerm { get; }
-            public string Output { get; }
+            public string Name { get; } = name;
+            public byte[] Sequence { get; } = sequence;
+            public bool IsTerm { get; } = isTerm;
+            public string Output { get; } = output;
 
             public override string ToString()
             {

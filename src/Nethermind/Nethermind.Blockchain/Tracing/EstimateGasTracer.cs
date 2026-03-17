@@ -40,7 +40,9 @@ public class EstimateGasTracer : TxTracer
 
     public bool OutOfGas { get; private set; }
 
-    public override void MarkAsSuccess(Address recipient, GasConsumed gasSpent, byte[] output, LogEntry[] logs,
+    public bool TopLevelRevert { get; private set; }
+
+    public override void MarkAsSuccess(Address recipient, in GasConsumed gasSpent, byte[] output, LogEntry[] logs,
         Hash256? stateRoot = null)
     {
         GasSpent = gasSpent.SpentGas;
@@ -48,7 +50,7 @@ public class EstimateGasTracer : TxTracer
         StatusCode = Evm.StatusCode.Success;
     }
 
-    public override void MarkAsFailed(Address recipient, GasConsumed gasSpent, byte[] output, string? error,
+    public override void MarkAsFailed(Address recipient, in GasConsumed gasSpent, byte[] output, string? error,
         Hash256? stateRoot = null)
     {
         GasSpent = gasSpent.SpentGas;
@@ -108,6 +110,7 @@ public class EstimateGasTracer : TxTracer
         if (_currentNestingLevel == -1)
         {
             OutOfGas = false;
+            TopLevelRevert = false;
             IntrinsicGasAt = gas;
         }
 
@@ -146,7 +149,15 @@ public class EstimateGasTracer : TxTracer
 
     public override void ReportOperationError(EvmExceptionType error)
     {
-        OutOfGas |= error == EvmExceptionType.OutOfGas || error == EvmExceptionType.Revert;
+        if (_currentNestingLevel == 0)
+        {
+            OutOfGas |= error == EvmExceptionType.OutOfGas;
+
+            if (error == EvmExceptionType.Revert)
+            {
+                TopLevelRevert = true;
+            }
+        }
     }
 
     private void UpdateAdditionalGas(long? gasLeft = null)

@@ -25,10 +25,10 @@ using Nethermind.Config;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Test;
 using Nethermind.Crypto;
-using Nethermind.State;
 
 namespace Nethermind.Blockchain.Test
 {
+    [Parallelizable(ParallelScope.All)]
     public class TransactionSelectorTests
     {
         public static IEnumerable ProperTransactionsSelectedTestCases
@@ -67,7 +67,7 @@ namespace Nethermind.Blockchain.Test
                 yield return new TestCaseData(baseFeeLowerThanGasPrice).SetName("Legacy transactions: All transactions selected - BaseFee lower than gas price");
 
                 ProperTransactionsSelectedTestCase baseFeeGreaterThanGasPrice = ProperTransactionsSelectedTestCase.Eip1559DefaultLegacyTransactions;
-                baseFeeGreaterThanGasPrice.BaseFee = 1.GWei();
+                baseFeeGreaterThanGasPrice.BaseFee = 1.GWei;
                 yield return new TestCaseData(baseFeeGreaterThanGasPrice).SetName("Legacy transactions: None transactions selected - BaseFee greater than gas price");
 
                 ProperTransactionsSelectedTestCase balanceCheckWithTxValue = new()
@@ -107,7 +107,7 @@ namespace Nethermind.Blockchain.Test
                 yield return new TestCaseData(baseFeeLowerThanGasPrice).SetName("EIP1559 transactions: All transactions selected - BaseFee lower than gas price");
 
                 ProperTransactionsSelectedTestCase baseFeeGreaterThanGasPrice = ProperTransactionsSelectedTestCase.Eip1559Default;
-                baseFeeGreaterThanGasPrice.BaseFee = 1.GWei();
+                baseFeeGreaterThanGasPrice.BaseFee = 1.GWei;
                 yield return new TestCaseData(baseFeeGreaterThanGasPrice).SetName("EIP1559 transactions: None transactions selected - BaseFee greater than gas price");
 
                 ProperTransactionsSelectedTestCase balanceCheckWithTxValue = new()
@@ -164,6 +164,7 @@ namespace Nethermind.Blockchain.Test
                 });
                 maxTransactionsSelected.Transactions[1].BlobVersionedHashes =
                     new byte[maxTransactionsSelected.ReleaseSpec.MaxBlobCount - 1][];
+                maxTransactionsSelected.Transactions[1].NetworkWrapper = new ShardBlobNetworkWrapper(new byte[5][], new byte[5][], new byte[5][], ProofVersion.V0);
                 maxTransactionsSelected.ExpectedSelectedTransactions.AddRange(
                     maxTransactionsSelected.Transactions.OrderBy(static t => t.Nonce).Take(2));
                 yield return new TestCaseData(maxTransactionsSelected).SetName("Enough transactions selected");
@@ -173,19 +174,17 @@ namespace Nethermind.Blockchain.Test
                 enoughTransactionsSelected.ReleaseSpec = Cancun.Instance;
                 enoughTransactionsSelected.BaseFee = 1;
 
+                ulong maxBlobCount = enoughTransactionsSelected.ReleaseSpec.MaxBlobCount;
                 Transaction[] expectedSelectedTransactions =
                     enoughTransactionsSelected.Transactions.OrderBy(static t => t.Nonce).ToArray();
                 expectedSelectedTransactions[0].Type = TxType.Blob;
-                expectedSelectedTransactions[0].BlobVersionedHashes =
-                    new byte[enoughTransactionsSelected.ReleaseSpec.MaxBlobCount][];
+                expectedSelectedTransactions[0].BlobVersionedHashes = new byte[maxBlobCount][];
+                expectedSelectedTransactions[0].NetworkWrapper = new ShardBlobNetworkWrapper(new byte[maxBlobCount][], new byte[maxBlobCount][], new byte[maxBlobCount][], ProofVersion.V0);
                 expectedSelectedTransactions[0].MaxFeePerBlobGas = 1;
-                expectedSelectedTransactions[0].NetworkWrapper =
-                    new ShardBlobNetworkWrapper(new byte[1][], new byte[1][], new byte[1][], ProofVersion.V0);
                 expectedSelectedTransactions[1].Type = TxType.Blob;
                 expectedSelectedTransactions[1].BlobVersionedHashes = new byte[1][];
+                expectedSelectedTransactions[1].NetworkWrapper = new ShardBlobNetworkWrapper(new byte[1][], new byte[1][], new byte[1][], ProofVersion.V0);
                 expectedSelectedTransactions[1].MaxFeePerBlobGas = 1;
-                expectedSelectedTransactions[1].NetworkWrapper =
-                    new ShardBlobNetworkWrapper(new byte[1][], new byte[1][], new byte[1][], ProofVersion.V0);
                 enoughTransactionsSelected.ExpectedSelectedTransactions.AddRange(
                     expectedSelectedTransactions.Where(static (_, index) => index != 1));
                 yield return new TestCaseData(enoughTransactionsSelected).SetName(
@@ -475,6 +474,41 @@ namespace Nethermind.Blockchain.Test
         [TestCaseSource(nameof(BlobTransactionOrderingTestCases))]
         public void Proper_transactions_selected(ProperTransactionsSelectedTestCase testCase)
         {
+            IReadOnlyList<Transaction> selectedTransactions = SelectTransactions(testCase);
+            selectedTransactions.Should()
+                .BeEquivalentTo(testCase.ExpectedSelectedTransactions, o => o.WithStrictOrdering());
+        }
+
+        [Test]
+        public void Block_gas_budget_uses_pre_refund_value_for_sender_chain()
+        {
+            Transaction first = Build.A.Transaction.WithSenderAddress(TestItem.AddressA).WithNonce(1)
+                .WithGasPrice(10).WithGasLimit(30_000).SignedAndResolved(TestItem.PrivateKeyA).TestObject;
+            Transaction second = Build.A.Transaction.WithSenderAddress(TestItem.AddressA).WithNonce(2)
+                .WithGasPrice(10).WithGasLimit(30_000).SignedAndResolved(TestItem.PrivateKeyA).TestObject;
+
+            first.SpentGas = 10_000;
+            first.BlockGasUsed = 20_000;
+            second.SpentGas = 10_000;
+            second.BlockGasUsed = 20_000;
+
+            ProperTransactionsSelectedTestCase testCase = new()
+            {
+                ReleaseSpec = Berlin.Instance,
+                BaseFee = 0,
+                AccountStates = { { TestItem.AddressA, (1_000_000, 1) } },
+                Transactions = { first, second },
+                GasLimit = 30_000
+            };
+            testCase.ExpectedSelectedTransactions.Add(first);
+
+            IReadOnlyList<Transaction> selectedTransactions = SelectTransactions(testCase);
+            selectedTransactions.Should()
+                .BeEquivalentTo(testCase.ExpectedSelectedTransactions, o => o.WithStrictOrdering());
+        }
+
+        private static IReadOnlyList<Transaction> SelectTransactions(ProperTransactionsSelectedTestCase testCase)
+        {
             IWorldState stateProvider = TestWorldStateFactory.CreateForTest();
             ISpecProvider specProvider = Substitute.For<ISpecProvider>();
 
@@ -550,11 +584,7 @@ namespace Nethermind.Blockchain.Test
                 parentHeader = parentHeader.WithExcessBlobGas(0);
             }
 
-            IEnumerable<Transaction> selectedTransactions =
-                poolTxSource.GetTransactions(parentHeader.TestObject,
-                    testCase.GasLimit);
-            selectedTransactions.Should()
-                .BeEquivalentTo(testCase.ExpectedSelectedTransactions, o => o.WithStrictOrdering());
+            return poolTxSource.GetTransactions(parentHeader.TestObject, testCase.GasLimit).ToArray();
         }
 
         public class ProperTransactionsSelectedTestCase
@@ -592,7 +622,7 @@ namespace Nethermind.Blockchain.Test
                 new()
                 {
                     ReleaseSpec = London.Instance,
-                    BaseFee = 1.GWei(),
+                    BaseFee = 1.GWei,
                     AccountStates = { { TestItem.AddressA, (1000, 1) } },
                     Transactions =
                     {
@@ -610,7 +640,7 @@ namespace Nethermind.Blockchain.Test
                 new()
                 {
                     ReleaseSpec = London.Instance,
-                    BaseFee = 1.GWei(),
+                    BaseFee = 1.GWei,
                     AccountStates = { { TestItem.AddressA, (1000, 1) } },
                     Transactions =
                     {

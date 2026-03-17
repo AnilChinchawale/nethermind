@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+<<<<<<< HEAD
+=======
+using System;
+>>>>>>> upstream/master
 using FluentAssertions;
 using Nethermind.Core.Crypto;
 using Nethermind.Serialization.Rlp;
@@ -41,7 +45,11 @@ public class VoteDecoderTests
                     0,
                     new Signature(new byte[64], 0)
                 ),
+<<<<<<< HEAD
                 true
+=======
+                false
+>>>>>>> upstream/master
             );
         }
     }
@@ -57,7 +65,12 @@ public class VoteDecoderTests
 
         if (useRlpStream)
         {
+<<<<<<< HEAD
             decoded = decoder.Decode(stream);
+=======
+            Rlp.ValueDecoderContext decoderContext = new Rlp.ValueDecoderContext(stream.Data.AsSpan());
+            decoded = decoder.Decode(ref decoderContext);
+>>>>>>> upstream/master
         }
         else
         {
@@ -82,8 +95,13 @@ public class VoteDecoderTests
         decoder.Encode(stream, vote);
         stream.Position = 0;
 
+<<<<<<< HEAD
         Vote decodedStream = decoder.Decode(stream);
         stream.Position = 0;
+=======
+        Rlp.ValueDecoderContext streamCtx = new Rlp.ValueDecoderContext(stream.Data.AsSpan());
+        Vote decodedStream = decoder.Decode(ref streamCtx);
+>>>>>>> upstream/master
 
         Rlp.ValueDecoderContext decoderContext = new Rlp.ValueDecoderContext(stream.Data.AsSpan());
         Vote decodedContext = decoder.Decode(ref decoderContext);
@@ -128,8 +146,12 @@ public class VoteDecoderTests
         Assert.That(sealingEncoded.Bytes.Length, Is.LessThan(normalEncoded.Bytes.Length),
             "ForSealing encoding should be shorter as it omits the signature.");
 
+<<<<<<< HEAD
         var stream = new RlpStream(sealingEncoded.Bytes);
         Vote decoded = decoder.Decode(stream, RlpBehaviors.ForSealing);
+=======
+        Vote decoded = decoder.Decode((ReadOnlySpan<byte>)sealingEncoded.Bytes, RlpBehaviors.ForSealing);
+>>>>>>> upstream/master
 
         Assert.That(decoded.Signature, Is.Null,
             "ForSealing decoding should not contain Signature field.");
@@ -144,16 +166,24 @@ public class VoteDecoderTests
 
         Rlp encoded = decoder.Encode(null!);
 
+<<<<<<< HEAD
         Assert.That(encoded, Is.EqualTo(Rlp.OfEmptySequence));
+=======
+        Assert.That(encoded, Is.EqualTo(Rlp.OfEmptyList));
+>>>>>>> upstream/master
     }
 
     [Test]
     public void Decode_Null_ReturnsNull()
     {
         var decoder = new VoteDecoder();
+<<<<<<< HEAD
         var stream = new RlpStream(Rlp.OfEmptySequence.Bytes);
 
         Vote decoded = decoder.Decode(stream);
+=======
+        Vote decoded = decoder.Decode((ReadOnlySpan<byte>)Rlp.OfEmptyList.Bytes);
+>>>>>>> upstream/master
 
         Assert.That(decoded, Is.Null);
     }
@@ -162,7 +192,11 @@ public class VoteDecoderTests
     public void Decode_EmptyByteArray_ValueDecoderContext_ReturnsNull()
     {
         var decoder = new VoteDecoder();
+<<<<<<< HEAD
         Rlp.ValueDecoderContext decoderContext = new Rlp.ValueDecoderContext(Rlp.OfEmptySequence.Bytes);
+=======
+        Rlp.ValueDecoderContext decoderContext = new Rlp.ValueDecoderContext(Rlp.OfEmptyList.Bytes);
+>>>>>>> upstream/master
 
         Vote decoded = decoder.Decode(ref decoderContext);
 

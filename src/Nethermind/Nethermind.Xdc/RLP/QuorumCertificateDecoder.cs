@@ -10,9 +10,10 @@ using System.Linq;
 using BlockRoundInfo = Nethermind.Xdc.Types.BlockRoundInfo;
 
 namespace Nethermind.Xdc;
+
 internal sealed class QuorumCertificateDecoder : RlpValueDecoder<QuorumCertificate>
 {
-    private XdcBlockInfoDecoder _blockInfoDecoder = new XdcBlockInfoDecoder();
+    private readonly XdcBlockInfoDecoder _blockInfoDecoder = new XdcBlockInfoDecoder();
     protected override QuorumCertificate DecodeInternal(ref Rlp.ValueDecoderContext decoderContext, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
     {
         int sequenceLength = decoderContext.ReadSequenceLength();
@@ -37,6 +38,7 @@ internal sealed class QuorumCertificateDecoder : RlpValueDecoder<QuorumCertifica
 
         ulong gap = decoderContext.DecodeULong();
         if ((rlpBehaviors & RlpBehaviors.AllowExtraBytes) != RlpBehaviors.AllowExtraBytes)
+<<<<<<< HEAD
         {
             decoderContext.Check(endPosition);
         }
@@ -56,26 +58,27 @@ internal sealed class QuorumCertificateDecoder : RlpValueDecoder<QuorumCertifica
             throw new RlpException("One or more invalid signature lengths in quorum certificate.");
         Signature[]? signatures = null;
         if (signatureBytes is not null)
+=======
+>>>>>>> upstream/master
         {
-            signatures = new Signature[signatureBytes.Length];
-            for (int i = 0; i < signatures.Length; i++)
-            {
-                signatures[i] = new Signature(signatureBytes[i].AsSpan(0, 64), signatureBytes[i][64]);
-            }
+            decoderContext.Check(endPosition);
         }
+<<<<<<< HEAD
 
         ulong gap = rlpStream.DecodeULong();
         if ((rlpBehaviors & RlpBehaviors.AllowExtraBytes) != RlpBehaviors.AllowExtraBytes)
         {
             rlpStream.Check(endPosition);
         }
+=======
+>>>>>>> upstream/master
         return new QuorumCertificate(blockInfo, signatures, gap);
     }
 
     public Rlp Encode(QuorumCertificate item, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
     {
         if (item is null)
-            return Rlp.OfEmptySequence;
+            return Rlp.OfEmptyList;
 
         RlpStream rlpStream = new(GetLength(item, rlpBehaviors));
         Encode(rlpStream, item, rlpBehaviors);

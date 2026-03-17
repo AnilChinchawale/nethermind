@@ -8,14 +8,19 @@ using Nethermind.Xdc.Types;
 using System;
 
 namespace Nethermind.Xdc;
+
 public sealed class VoteDecoder : RlpValueDecoder<Vote>
 {
     private static readonly XdcBlockInfoDecoder _xdcBlockInfoDecoder = new();
 
     protected override Vote DecodeInternal(ref Rlp.ValueDecoderContext decoderContext, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
     {
-        if (decoderContext.IsNextItemNull())
+        if (decoderContext.IsNextItemEmptyList())
+        {
+            decoderContext.ReadByte();
             return null;
+        }
+
         int sequenceLength = decoderContext.ReadSequenceLength();
         int endPosition = decoderContext.Position + sequenceLength;
 
@@ -34,6 +39,7 @@ public sealed class VoteDecoder : RlpValueDecoder<Vote>
         return new Vote(proposedBlockInfo, gapNumber, signature);
     }
 
+<<<<<<< HEAD
     protected override Vote DecodeInternal(RlpStream rlpStream, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
     {
         if (rlpStream.IsNextItemNull())
@@ -56,6 +62,8 @@ public sealed class VoteDecoder : RlpValueDecoder<Vote>
         return new Vote(proposedBlockInfo, gapNumber, signature);
     }
 
+=======
+>>>>>>> upstream/master
     public override void Encode(RlpStream stream, Vote item, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
     {
         if (item is null)
@@ -73,7 +81,7 @@ public sealed class VoteDecoder : RlpValueDecoder<Vote>
     public Rlp Encode(Vote item, RlpBehaviors rlpBehaviors = RlpBehaviors.None)
     {
         if (item is null)
-            return Rlp.OfEmptySequence;
+            return Rlp.OfEmptyList;
 
         RlpStream rlpStream = new(GetLength(item, rlpBehaviors));
         Encode(rlpStream, item, rlpBehaviors);
@@ -86,10 +94,10 @@ public sealed class VoteDecoder : RlpValueDecoder<Vote>
         return Rlp.LengthOfSequence(GetContentLength(item, rlpBehaviors));
     }
 
-    private int GetContentLength(Vote item, RlpBehaviors rlpBehaviors)
+    public int GetContentLength(Vote item, RlpBehaviors rlpBehaviors)
     {
         return
-            (rlpBehaviors & RlpBehaviors.ForSealing) != RlpBehaviors.ForSealing ? Rlp.LengthOfSequence(Signature.Size) : 0
+            ((rlpBehaviors & RlpBehaviors.ForSealing) != RlpBehaviors.ForSealing ? Rlp.LengthOfSequence(Signature.Size) : 0)
             + Rlp.LengthOf(item.GapNumber)
             + _xdcBlockInfoDecoder.GetLength(item.ProposedBlockInfo, rlpBehaviors);
     }

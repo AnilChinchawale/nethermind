@@ -1,24 +1,26 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using Nethermind.Blockchain;
+using Nethermind.Consensus;
+using Nethermind.Core;
+using Nethermind.Core.Crypto;
+using Nethermind.Core.Specs;
+using Nethermind.Core.Test.Builders;
+using Nethermind.Crypto;
+using Nethermind.Synchronization.Peers;
+using Nethermind.Xdc.Spec;
+using Nethermind.Xdc.Types;
 using NSubstitute;
 using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Nethermind.Blockchain;
-using Nethermind.Core;
-using Nethermind.Core.Crypto;
-using Nethermind.Core.Specs;
-using Nethermind.Core.Test.Builders;
-using Nethermind.Consensus;
-using Nethermind.Crypto;
-using Nethermind.Xdc.Spec;
-using Nethermind.Xdc.Types;
 
 namespace Nethermind.Xdc.Test;
 
+[Parallelizable(ParallelScope.All)]
 public class TimeoutCertificateManagerTests
 {
 
@@ -42,7 +44,7 @@ public class TimeoutCertificateManagerTests
     {
         var tc = new TimeoutCertificate(1, Array.Empty<Signature>(), 0);
         ISnapshotManager snapshotManager = Substitute.For<ISnapshotManager>();
-        snapshotManager.GetSnapshotByGapNumber(Arg.Any<ulong>())
+        snapshotManager.GetSnapshotByGapNumber(Arg.Any<long>())
                     .Returns((Snapshot?)null);
         IBlockTree blockTree = Substitute.For<IBlockTree>();
         XdcBlockHeader header = Build.A.XdcBlockHeader().TestObject;
@@ -51,11 +53,13 @@ public class TimeoutCertificateManagerTests
         specProvider.GetSpec(Arg.Any<ForkActivation>()).Returns(new XdcReleaseSpec() { V2Configs = [new V2ConfigParams()] });
         var tcManager = new TimeoutCertificateManager(
             new XdcConsensusContext(),
+            Substitute.For<ITimeoutTimer>(),
+            Substitute.For<ISyncPeerPool>(),
             snapshotManager,
             Substitute.For<IEpochSwitchManager>(),
             specProvider,
             blockTree,
-            Substitute.For<ISyncInfoManager>(),
+
             Substitute.For<ISigner>());
 
         var ok = tcManager.VerifyTimeoutCertificate(tc, out var err);
@@ -68,7 +72,7 @@ public class TimeoutCertificateManagerTests
     {
         var tc = new TimeoutCertificate(1, Array.Empty<Signature>(), 0);
         ISnapshotManager snapshotManager = Substitute.For<ISnapshotManager>();
-        snapshotManager.GetSnapshotByGapNumber(Arg.Any<ulong>())
+        snapshotManager.GetSnapshotByGapNumber(Arg.Any<long>())
             .Returns(new Snapshot(0, Hash256.Zero, Array.Empty<Address>()));
         IBlockTree blockTree = Substitute.For<IBlockTree>();
         XdcBlockHeader header = Build.A.XdcBlockHeader().TestObject;
@@ -79,11 +83,13 @@ public class TimeoutCertificateManagerTests
         specProvider.GetSpec(Arg.Any<ForkActivation>()).Returns(new XdcReleaseSpec() { V2Configs = [new V2ConfigParams()] });
         var tcManager = new TimeoutCertificateManager(
             new XdcConsensusContext(),
+            Substitute.For<ITimeoutTimer>(),
+            Substitute.For<ISyncPeerPool>(),
             snapshotManager,
             Substitute.For<IEpochSwitchManager>(),
             specProvider,
             blockTree,
-            Substitute.For<ISyncInfoManager>(),
+
             Substitute.For<ISigner>());
 
         var ok = tcManager.VerifyTimeoutCertificate(tc, out var err);
@@ -119,7 +125,7 @@ public class TimeoutCertificateManagerTests
     {
         Address[] masternodes = masternodesList.ToArray();
         ISnapshotManager snapshotManager = Substitute.For<ISnapshotManager>();
-        snapshotManager.GetSnapshotByGapNumber(Arg.Any<ulong>())
+        snapshotManager.GetSnapshotByGapNumber(Arg.Any<long>())
             .Returns(new Snapshot(0, Hash256.Zero, masternodes));
 
         IEpochSwitchManager epochSwitchManager = Substitute.For<IEpochSwitchManager>();
@@ -136,7 +142,7 @@ public class TimeoutCertificateManagerTests
         IXdcReleaseSpec xdcReleaseSpec = Substitute.For<IXdcReleaseSpec>();
         xdcReleaseSpec.EpochLength.Returns(900);
         xdcReleaseSpec.SwitchEpoch.Returns(89300);
-        xdcReleaseSpec.CertThreshold.Returns(0.667);
+        xdcReleaseSpec.CertificateThreshold.Returns(0.667);
         specProvider.GetSpec(Arg.Any<ForkActivation>()).Returns(xdcReleaseSpec);
 
         IBlockTree blockTree = Substitute.For<IBlockTree>();
@@ -145,11 +151,11 @@ public class TimeoutCertificateManagerTests
         blockTree.FindHeader(Arg.Any<long>()).Returns(header);
 
         var context = new XdcConsensusContext();
-        ISyncInfoManager syncInfoManager = Substitute.For<ISyncInfoManager>();
         ISigner signer = Substitute.For<ISigner>();
 
-        var tcManager = new TimeoutCertificateManager(context, snapshotManager, epochSwitchManager, specProvider,
-            blockTree, syncInfoManager, signer);
+        var tcManager = new TimeoutCertificateManager(context, Substitute.For<ITimeoutTimer>(),
+            Substitute.For<ISyncPeerPool>(), snapshotManager, epochSwitchManager, specProvider,
+            blockTree, signer);
 
         Assert.That(tcManager.VerifyTimeoutCertificate(timeoutCertificate, out _), Is.EqualTo(expected));
     }
@@ -188,11 +194,12 @@ public class TimeoutCertificateManagerTests
         blockTree.Head.Returns(new Block(header, new BlockBody()));
 
         var context = new XdcConsensusContext() { CurrentRound = 100 };
-        ISyncInfoManager syncInfoManager = Substitute.For<ISyncInfoManager>();
         ISigner signer = Substitute.For<ISigner>();
 
-        var tcManager = new TimeoutCertificateManager(context, snapshotManager, epochSwitchManager, specProvider,
-            blockTree, syncInfoManager, signer);
+        var tcManager = new TimeoutCertificateManager(context,
+            Substitute.For<ITimeoutTimer>(),
+            Substitute.For<ISyncPeerPool>(), snapshotManager, epochSwitchManager, specProvider,
+            blockTree, signer);
 
         var key = correctSigner ? keys.First() : keys.Last();
         var timeout = XdcTestHelper.BuildSignedTimeout(key, round, gap);
@@ -203,11 +210,13 @@ public class TimeoutCertificateManagerTests
     {
         return new TimeoutCertificateManager(
             ctx ?? new XdcConsensusContext(),
+            Substitute.For<ITimeoutTimer>(),
+            Substitute.For<ISyncPeerPool>(),
             Substitute.For<ISnapshotManager>(),
             Substitute.For<IEpochSwitchManager>(),
             Substitute.For<ISpecProvider>(),
             Substitute.For<IBlockTree>(),
-            Substitute.For<ISyncInfoManager>(),
+
             Substitute.For<ISigner>());
     }
 

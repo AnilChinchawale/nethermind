@@ -8,17 +8,14 @@ using System.Linq;
 using System.Numerics;
 using Autofac.Features.AttributeFilters;
 using Nethermind.Config;
-using Nethermind.Consensus;
-using Nethermind.Consensus.Scheduler;
 using Nethermind.Core.Crypto;
-using Nethermind.Core.Specs;
 using Nethermind.Db;
 using Nethermind.Logging;
 using Nethermind.Network.Contract.P2P;
 using Nethermind.Network.P2P;
 using Nethermind.Network.P2P.EventArg;
-using Nethermind.Network.P2P.Messages;
 using Nethermind.Network.P2P.ProtocolHandlers;
+<<<<<<< HEAD
 using Nethermind.Network.P2P.Subprotocols.Eth;
 using Nethermind.Network.P2P.Subprotocols.Eth.V62;
 using Nethermind.Network.P2P.Subprotocols.Eth.V63;
@@ -28,26 +25,27 @@ using Nethermind.Network.P2P.Subprotocols.Eth.V68;
 using Nethermind.Network.P2P.Subprotocols.Eth.V69;
 using Nethermind.Network.P2P.Subprotocols.NodeData;
 using Nethermind.Network.P2P.Subprotocols.Snap;
+=======
+>>>>>>> upstream/master
 using Nethermind.Network.Rlpx;
-using Nethermind.State;
-using Nethermind.State.SnapServer;
 using Nethermind.Stats;
 using Nethermind.Stats.Model;
-using Nethermind.Synchronization;
 using Nethermind.Synchronization.Peers;
 using Nethermind.TxPool;
-using ShouldGossip = Nethermind.TxPool.ShouldGossip;
 
 namespace Nethermind.Network
 {
-    public class ProtocolsManager : IProtocolsManager
+    public class ProtocolsManager : IProtocolsManager, IProtocolRegistrar
     {
         public static readonly IEnumerable<Capability> DefaultCapabilities = new Capability[]
         {
+<<<<<<< HEAD
             new(Protocol.Eth, 62),
             new(Protocol.Eth, 63),
             new(Protocol.Eth, 66),
             new(Protocol.Eth, 67),
+=======
+>>>>>>> upstream/master
             new(Protocol.Eth, 68),
             new(Protocol.NodeData, 1)
         };
@@ -55,72 +53,45 @@ namespace Nethermind.Network
         // on every XDC peer connection. eth/62 and eth/63 added so XDC peers can negotiate eth/63.
 
         private readonly ConcurrentDictionary<Guid, SyncPeerProtocolHandlerBase> _syncPeers = new();
-
-        private readonly ConcurrentDictionary<Node, ConcurrentDictionary<Guid, ProtocolHandlerBase>> _hangingSatelliteProtocols =
-            new();
-
-        private readonly ConcurrentDictionary<Guid, ISession> _sessions = new();
+        private readonly ConcurrentDictionary<Node, ConcurrentDictionary<Guid, ProtocolHandlerBase>> _hangingSatelliteProtocols = new();
         private readonly ISyncPeerPool _syncPool;
-        private readonly ISyncServer _syncServer;
         private readonly ITxPool _txPool;
-        private readonly IDiscoveryApp _discoveryApp;
-        private readonly IMessageSerializationService _serializer;
-        private readonly IRlpxHost _rlpxHost;
         private readonly INodeStatsManager _stats;
+        private readonly ConcurrentDictionary<Guid, ISession> _sessions = new();
+        private readonly IDiscoveryApp _discoveryApp;
         private readonly IProtocolValidator _protocolValidator;
         private readonly INetworkStorage _peerStorage;
-        private readonly IForkInfo _forkInfo;
-        private readonly IGossipPolicy _gossipPolicy;
-        private readonly ITxGossipPolicy _txGossipPolicy;
-        private readonly ILogManager _logManager;
-        private readonly ITxPoolConfig _txPoolConfdig;
-        private readonly ISpecProvider _specProvider;
         private readonly ILogger _logger;
-        private readonly IDictionary<string, Func<ISession, int, IProtocolHandler>> _protocolFactories;
+        private readonly IProtocolHandlerFactory[] _factories;
         private readonly HashSet<Capability> _capabilities = DefaultCapabilities.ToHashSet();
+<<<<<<< HEAD
         private readonly IBackgroundTaskScheduler _backgroundTaskScheduler;
         private readonly ISnapServer? _snapServer;
         private ICustomEthProtocolFactory? _customEthFactory;
+=======
+>>>>>>> upstream/master
 
         public ProtocolsManager(
             ISyncPeerPool syncPeerPool,
-            ISyncServer syncServer,
-            IBackgroundTaskScheduler backgroundTaskScheduler,
             ITxPool txPool,
             IDiscoveryApp discoveryApp,
-            IMessageSerializationService serializationService,
             IRlpxHost rlpxHost,
             INodeStatsManager nodeStatsManager,
             IProtocolValidator protocolValidator,
             [KeyFilter(DbNames.PeersDb)] INetworkStorage peerStorage,
-            IForkInfo forkInfo,
-            IGossipPolicy gossipPolicy,
-            IWorldStateManager worldStateManager,
-            ILogManager logManager,
-            ITxPoolConfig txPoolConfdig,
-            ISpecProvider specProvider,
-            ITxGossipPolicy? transactionsGossipPolicy = null)
+            IProtocolHandlerFactory[] factories,
+            ILogManager logManager)
         {
             _syncPool = syncPeerPool ?? throw new ArgumentNullException(nameof(syncPeerPool));
-            _syncServer = syncServer ?? throw new ArgumentNullException(nameof(syncServer));
-            _backgroundTaskScheduler = backgroundTaskScheduler ?? throw new ArgumentNullException(nameof(backgroundTaskScheduler));
             _txPool = txPool ?? throw new ArgumentNullException(nameof(txPool));
             _discoveryApp = discoveryApp ?? throw new ArgumentNullException(nameof(discoveryApp));
-            _serializer = serializationService ?? throw new ArgumentNullException(nameof(serializationService));
-            _rlpxHost = rlpxHost ?? throw new ArgumentNullException(nameof(rlpxHost));
             _stats = nodeStatsManager ?? throw new ArgumentNullException(nameof(nodeStatsManager));
             _protocolValidator = protocolValidator ?? throw new ArgumentNullException(nameof(protocolValidator));
             _peerStorage = peerStorage ?? throw new ArgumentNullException(nameof(peerStorage));
-            _forkInfo = forkInfo ?? throw new ArgumentNullException(nameof(forkInfo));
-            _gossipPolicy = gossipPolicy ?? throw new ArgumentNullException(nameof(gossipPolicy));
-            _txGossipPolicy = transactionsGossipPolicy ?? ShouldGossip.Instance;
-            _logManager = logManager ?? throw new ArgumentNullException(nameof(logManager));
-            _txPoolConfdig = txPoolConfdig;
-            _specProvider = specProvider;
-            _snapServer = worldStateManager.SnapServer;
-            _logger = _logManager?.GetClassLogger() ?? throw new ArgumentNullException(nameof(logManager));
+            _logger = logManager?.GetClassLogger() ?? throw new ArgumentNullException(nameof(logManager));
 
-            _protocolFactories = GetProtocolFactories();
+            // Order is already set by OrderedComponents<T> (AddFirst/AddLast)
+            _factories = factories;
             rlpxHost.SessionCreated += SessionCreated;
         }
 
@@ -171,10 +142,10 @@ namespace Nethermind.Network
         private void SessionInitialized(object sender, EventArgs e)
         {
             ISession session = (ISession)sender;
-            InitProtocol(session, Protocol.P2P, session.P2PVersion, true);
+            InitProtocol(session, Protocol.P2P, session.P2PVersion);
         }
 
-        private void InitProtocol(ISession session, string protocolCode, int version, bool addCapabilities = false)
+        private void InitProtocol(ISession session, string protocolCode, int version)
         {
             if (session.State < SessionState.Initialized)
             {
@@ -187,35 +158,31 @@ namespace Nethermind.Network
             }
 
             string code = protocolCode.ToLowerInvariant();
-            if (!_protocolFactories.TryGetValue(code, out Func<ISession, int, IProtocolHandler> protocolFactory))
-            {
-                throw new NotSupportedException($"Protocol {code} {version} is not supported");
-            }
 
-            IProtocolHandler protocolHandler = protocolFactory(session, version);
-            protocolHandler.SubprotocolRequested += (s, e) => InitProtocol(session, e.ProtocolCode, e.Version);
-            session.AddProtocolHandler(protocolHandler);
-            if (addCapabilities)
+            // Try DI-registered factories in reverse order (plugins registered last take priority)
+            for (int i = _factories.Length - 1; i >= 0; i--)
             {
-                foreach (Capability capability in _capabilities)
+                IProtocolHandlerFactory factory = _factories[i];
+                if (factory.ProtocolCode != code) continue;
+                if (factory.TryCreate(session, version, out IProtocolHandler? handler))
                 {
-                    session.AddSupportedCapability(capability);
+                    InitHandler(session, handler);
+                    return;
                 }
             }
 
-            protocolHandler.Init();
+            throw new NotSupportedException($"Protocol {code} {version} is not supported");
         }
 
-        public void AddProtocol(string code, Func<ISession, IProtocolHandler> factory)
+        private void InitHandler(ISession session, IProtocolHandler handler)
         {
-            if (_protocolFactories.ContainsKey(code))
-            {
-                throw new InvalidOperationException($"Protocol {code} was already added.");
-            }
-
-            _protocolFactories[code] = (session, _) => factory(session);
+            handler.SubprotocolRequested += (s, e) => InitProtocol(session, e.ProtocolCode, e.Version);
+            session.AddProtocolHandler(handler);
+            handler.RegisterWith(session, this);
+            handler.Init();
         }
 
+<<<<<<< HEAD
         private IDictionary<string, Func<ISession, int, IProtocolHandler>> GetProtocolFactories()
             => new Dictionary<string, Func<ISession, int, IProtocolHandler>>
             {
@@ -279,9 +246,12 @@ namespace Nethermind.Network
             };
 
         private void InitSatelliteProtocol(ISession session, ProtocolHandlerBase handler)
+=======
+        void IProtocolRegistrar.Register(ISession session, ProtocolHandlerBase handler)
+>>>>>>> upstream/master
         {
             session.Node.EthDetails = handler.Name;
-            handler.ProtocolInitialized += (sender, args) =>
+            handler.ProtocolInitialized += (_, args) =>
             {
                 if (!RunBasicChecks(session, handler.ProtocolCode, handler.ProtocolVersion)) return;
                 // SyncPeerProtocolInitializedEventArgs typedArgs = (SyncPeerProtocolInitializedEventArgs)args;
@@ -296,7 +266,7 @@ namespace Nethermind.Network
                 bool isValid = _protocolValidator.DisconnectOnInvalid(handler.ProtocolCode, session, args);
                 if (isValid)
                 {
-                    var peer = _syncPool.GetPeer(session.Node);
+                    PeerInfo? peer = _syncPool.GetPeer(session.Node);
                     if (peer is not null)
                     {
                         peer.SyncPeer.RegisterSatelliteProtocol(handler.ProtocolCode, handler);
@@ -306,12 +276,12 @@ namespace Nethermind.Network
                     else
                     {
                         _hangingSatelliteProtocols.AddOrUpdate(session.Node,
-                            new ConcurrentDictionary<Guid, ProtocolHandlerBase>(new[] { new KeyValuePair<Guid, ProtocolHandlerBase>(session.SessionId, handler) }),
-                            (node, dict) =>
-                        {
-                            dict[session.SessionId] = handler;
-                            return dict;
-                        });
+                            _ => new ConcurrentDictionary<Guid, ProtocolHandlerBase> { [session.SessionId] = handler },
+                            (_, dict) =>
+                            {
+                                dict[session.SessionId] = handler;
+                                return dict;
+                            });
 
                         if (_logger.IsTrace) _logger.Trace($"{handler.ProtocolCode} satellite protocol sync peer {session} not found.");
                     }
@@ -325,9 +295,16 @@ namespace Nethermind.Network
             };
         }
 
-        private void InitP2PProtocol(ISession session, P2PProtocolHandler handler)
+        void IProtocolRegistrar.Register(ISession session, P2PProtocolHandler handler)
         {
-            handler.ProtocolInitialized += (sender, args) =>
+            session.PingSender = handler;
+
+            foreach (Capability capability in _capabilities)
+            {
+                session.AddSupportedCapability(capability);
+            }
+
+            handler.ProtocolInitialized += (_, args) =>
             {
                 P2PProtocolInitializedEventArgs typedArgs = (P2PProtocolInitializedEventArgs)args;
                 if (!RunBasicChecks(session, Protocol.P2P, handler.ProtocolVersion)) return;
@@ -358,10 +335,10 @@ namespace Nethermind.Network
             };
         }
 
-        private void InitSyncPeerProtocol(ISession session, SyncPeerProtocolHandlerBase handler)
+        void IProtocolRegistrar.Register(ISession session, SyncPeerProtocolHandlerBase handler)
         {
             session.Node.EthDetails = handler.Name;
-            handler.ProtocolInitialized += (sender, args) =>
+            handler.ProtocolInitialized += (_, args) =>
             {
                 if (!RunBasicChecks(session, handler.ProtocolCode, handler.ProtocolVersion)) return;
                 SyncPeerProtocolInitializedEventArgs typedArgs = (SyncPeerProtocolInitializedEventArgs)args;
@@ -378,7 +355,7 @@ namespace Nethermind.Network
                 {
                     if (_syncPeers.TryAdd(session.SessionId, handler))
                     {
-                        if (_hangingSatelliteProtocols.TryGetValue(handler.Node, out var handlerDictionary))
+                        if (_hangingSatelliteProtocols.TryGetValue(handler.Node, out ConcurrentDictionary<Guid, ProtocolHandlerBase> handlerDictionary))
                         {
                             foreach (KeyValuePair<Guid, ProtocolHandlerBase> registration in handlerDictionary)
                             {
@@ -423,7 +400,7 @@ namespace Nethermind.Network
         }
 
         /// <summary>
-        /// In case of IN connection we don't know what is the port node is listening on until we receive the Hello message
+        /// In case of IN connection we don't know what the port node is listening on is until we receive the Hello message
         /// </summary>
         private void AddNodeToDiscovery(ISession session, P2PProtocolInitializedEventArgs eventArgs)
         {
@@ -456,29 +433,15 @@ namespace Nethermind.Network
             }
         }
 
-        public void SendNewCapability(Capability capability)
-        {
-            AddCapabilityMessage message = new(capability);
-            foreach ((Guid _, ISession session) in _sessions)
-            {
-                if (!session.HasAgreedCapability(capability) && session.HasAvailableCapability(capability))
-                {
-                    session.DeliverMessage(message);
-                }
-                else
-                {
-                    message.Dispose();
-                }
-            }
-        }
-
         public int GetHighestProtocolVersion(string protocol)
         {
             int highestVersion = 0;
             foreach (Capability capability in _capabilities)
             {
                 if (capability.ProtocolCode == protocol)
+                {
                     highestVersion = Math.Max(highestVersion, capability.Version);
+                }
             }
 
             return highestVersion;

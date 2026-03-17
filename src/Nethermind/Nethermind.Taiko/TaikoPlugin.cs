@@ -36,6 +36,7 @@ using Nethermind.Serialization.Json;
 using Nethermind.Taiko.BlockTransactionExecutors;
 using Nethermind.Taiko.Config;
 using Nethermind.Taiko.Rpc;
+using Nethermind.Taiko.Tdx;
 using Nethermind.Taiko.TaikoSpec;
 
 namespace Nethermind.Taiko;
@@ -70,14 +71,22 @@ public class TaikoPlugin(ChainSpec chainSpec) : IConsensusPlugin
         ArgumentNullException.ThrowIfNull(_api?.SpecProvider);
 
         var taikoSpec = (TaikoReleaseSpec)_api.SpecProvider.GetFinalSpec();
+        var logger = _api.Context.Resolve<ILogManager>().GetClassLogger<TaikoPlugin>();
 
         if (!taikoSpec.IsRip7728Enabled)
+        {
+            if (logger.IsInfo) logger.Info("L1SLOAD (RIP-7728) is disabled in chainspec");
             return;
+        }
+
+        if (logger.IsInfo) logger.Info("L1SLOAD (RIP-7728) is enabled in chainspec");
 
         ISurgeConfig surgeConfig = _api.Context.Resolve<ISurgeConfig>();
 
         if (string.IsNullOrEmpty(surgeConfig.L1EthApiEndpoint))
             throw new ArgumentException($"{nameof(surgeConfig.L1EthApiEndpoint)} must be provided in the Surge configuration to use L1SLOAD precompile");
+
+        if (logger.IsInfo) logger.Info($"L1SLOAD: using L1 endpoint: {surgeConfig.L1EthApiEndpoint}");
 
         var storageProvider = new JsonRpcL1StorageProvider(
             surgeConfig.L1EthApiEndpoint,
@@ -85,6 +94,8 @@ public class TaikoPlugin(ChainSpec chainSpec) : IConsensusPlugin
             _api.Context.Resolve<ILogManager>());
 
         L1SloadPrecompile.L1StorageProvider = storageProvider;
+        L1SloadPrecompile.Logger = _api.Context.Resolve<ILogManager>().GetClassLogger<L1SloadPrecompile>();
+        if (logger.IsInfo) logger.Info("L1SLOAD: precompile fully initialized");
     }
 
     public bool MustInitialize => true;
@@ -126,7 +137,7 @@ public class TaikoModule : Module
             .AddStep(typeof(InitializeBlockchainTaiko))
 
             // L1 origin store
-            .AddSingleton<IRlpStreamDecoder<L1Origin>, L1OriginDecoder>()
+            .AddSingleton<RlpValueDecoder<L1Origin>, L1OriginDecoder>()
             .AddDatabase(L1OriginStore.L1OriginDbName, L1OriginStore.L1OriginDbName, L1OriginStore.L1OriginDbName.ToLower())
             .AddSingleton<IL1OriginStore, L1OriginStore>()
 
@@ -151,8 +162,9 @@ public class TaikoModule : Module
             .AddScoped<ITransactionProcessor, TaikoTransactionProcessor>()
             .AddScoped<IBlockProducerEnvFactory, TaikoBlockProductionEnvFactory>()
 
-            .AddSingleton<IRlpStreamDecoder<Transaction>>((_) => Rlp.GetStreamDecoder<Transaction>()!)
-            .AddSingleton<IPayloadPreparationService, IBlockProducerEnvFactory, L1OriginStore, IRlpStreamDecoder<Transaction>, ILogManager>(CreatePayloadPreparationService)
+            .AddSingleton<IRlpStreamEncoder<Transaction>>((_) => Rlp.GetStreamEncoder<Transaction>()!)
+            .AddSingleton<IRlpValueDecoder<Transaction>>((_) => Rlp.GetValueDecoder<Transaction>()!)
+            .AddSingleton<IPayloadPreparationService, IBlockProducerEnvFactory, L1OriginStore, IRlpValueDecoder<Transaction>, ILogManager>(CreatePayloadPreparationService)
             .AddSingleton<IHealthHintService, IBlocksConfig>(blocksConfig =>
                 new ManualHealthHintService(blocksConfig.SecondsPerSlot * 6, HealthHintConstants.InfinityHint))
 
@@ -196,10 +208,13 @@ public class TaikoModule : Module
             .RegisterSingletonJsonRpcModule<ITaikoEngineRpcModule, TaikoEngineRpcModule>()
                 .AddSingleton<IForkchoiceUpdatedHandler, TaikoForkchoiceUpdatedHandler>()
 
+            // TDX attestation (enabled with Surge.TdxEnabled) 
+            .AddModule(new TdxModule())
+
             // Need to set the rlp globally
             .OnBuild(ctx =>
             {
-                Rlp.RegisterDecoder(typeof(L1Origin), ctx.Resolve<IRlpStreamDecoder<L1Origin>>());
+                Rlp.RegisterDecoder(typeof(L1Origin), ctx.Resolve<RlpValueDecoder<L1Origin>>());
             })
             ;
     }
@@ -207,7 +222,7 @@ public class TaikoModule : Module
     private static IPayloadPreparationService CreatePayloadPreparationService(
         IBlockProducerEnvFactory blockProducerEnvFactory,
         L1OriginStore l1OriginStore,
-        IRlpStreamDecoder<Transaction> txDecoder,
+        IRlpValueDecoder<Transaction> txDecoder,
         ILogManager logManager)
     {
         IBlockProducerEnv blockProducerEnv = blockProducerEnvFactory.Create();

@@ -44,10 +44,10 @@ public class TestRawTrieStore(INodeStorage nodeStorage, bool isReadOnly = false)
         remove => throw new Exception("Unsupported operation");
     }
 
-    public IReadOnlyKeyValueStore TrieNodeRlpStore => throw new Exception("Unsupported operatioon");
+    public IReadOnlyKeyValueStore TrieNodeRlpStore => throw new Exception("Unsupported operation");
 
-    private Lock _scopeLock = new Lock();
-    private Lock _pruneLock = new Lock();
+    private readonly Lock _scopeLock = new();
+    private readonly Lock _pruneLock = new();
 
     public TrieStore.StableLockScope PrepareStableState(CancellationToken cancellationToken)
     {
