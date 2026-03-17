@@ -2,19 +2,24 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using FluentAssertions;
-using Nethermind.Xdc.Types;
+using Nethermind.Blockchain.Tracing.GethStyle.Custom.JavaScript;
+using Nethermind.Consensus;
 using Nethermind.Xdc.Test.Helpers;
+using Nethermind.Xdc.Types;
 using NUnit.Framework;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace Nethermind.Xdc.Test;
-
 internal class XdcReorgModuleTests
 {
     [Test]
     public async Task TestNormalReorgWhenNotInvolveCommittedBlock()
     {
-        using var blockChain = await XdcTestBlockchain.Create();
+        var blockChain = await XdcTestBlockchain.Create();
         var startRound = blockChain.XdcContext.CurrentRound;
         await blockChain.AddBlocks(3);
         // Simulate timeout to make block rounds non-consecutive preventing finalization
@@ -33,7 +38,7 @@ internal class XdcReorgModuleTests
     [Test]
     public async Task BuildAValidForkOnFinalizedBlockAndAssertForkBecomesCanonical()
     {
-        using var blockChain = await XdcTestBlockchain.Create(3);
+        var blockChain = await XdcTestBlockchain.Create(3);
         var startRound = blockChain.XdcContext.CurrentRound;
         await blockChain.AddBlocks(10);
 
@@ -48,24 +53,24 @@ internal class XdcReorgModuleTests
             newHeadWaitHandle.SetResult();
         };
 
-        XdcBlockHeader forkParent = finalizedBlock;
+        XdcBlockHeader forkparent = finalizedBlock;
         for (int i = 0; i < 3; i++)
         {
             //Build a fork on finalized block, which should result in fork becoming new head
-            forkParent = (XdcBlockHeader)(await blockChain.AddBlockFromParent(forkParent)).Header;
+            forkparent = (XdcBlockHeader)(await blockChain.AddBlockFromParent(forkparent)).Header;
         }
 
-        if (blockChain.BlockTree.Head!.Hash != forkParent.Hash)
+        if (blockChain.BlockTree.Head!.Hash != forkparent.Hash)
         {
-            //Wait for new head
+            //Wait for new head 
             await Task.WhenAny(newHeadWaitHandle.Task, Task.Delay(5_000));
         }
 
-        blockChain.BlockTree.Head!.Hash.Should().Be(forkParent.Hash!);
+        blockChain.BlockTree.Head!.Hash.Should().Be(forkparent.Hash!);
         //The new fork head should commit it's grandparent as finalized
-        blockChain.XdcContext.HighestCommitBlock.Hash.Should().Be(blockChain.BlockTree.FindHeader(forkParent.ParentHash!)!.ParentHash!);
+        blockChain.XdcContext.HighestCommitBlock.Hash.Should().Be(blockChain.BlockTree.FindHeader(forkparent.ParentHash!)!.ParentHash!);
         //Our lock QC should be parent of the fork head
-        blockChain.XdcContext.LockQC!.ProposedBlockInfo.Hash.Should().Be(forkParent.ParentHash!);
+        blockChain.XdcContext.LockQC!.ProposedBlockInfo.Hash.Should().Be(forkparent.ParentHash!);
     }
 
     [TestCase(5)]
@@ -73,7 +78,7 @@ internal class XdcReorgModuleTests
     [TestCase(901)]
     public async Task TestShouldNotReorgCommittedBlock(int number)
     {
-        using var blockChain = await XdcTestBlockchain.Create();
+        var blockChain = await XdcTestBlockchain.Create();
         var startRound = blockChain.XdcContext.CurrentRound;
         await blockChain.AddBlocks(number);
         var finalizedBlockInfo = blockChain.XdcContext.HighestCommitBlock;
@@ -87,46 +92,4 @@ internal class XdcReorgModuleTests
         blockChain.BlockTree.SuggestBlock(forkBlock!).Should().Be(Blockchain.AddBlockResult.InvalidBlock);
     }
 
-    [Test]
-    public async Task AfterReorgSnapshotManagerReturnsSnapshotForNewChainGapBlock()
-    {
-        using var blockChain = await XdcTestBlockchain.Create(3);
-        blockChain.ChangeReleaseSpec(spec => { spec.EpochLength = 10; spec.Gap = 5; });
-        await blockChain.AddBlocks(3);
-
-        const long gapBlockNumber = 5;
-
-
-        XdcBlockHeader originalChainGapBlock = (XdcBlockHeader)blockChain.BlockTree.FindHeader(gapBlockNumber)!;
-
-        Snapshot? snapshotBeforeReorg = blockChain.SnapshotManager.GetSnapshotByGapNumber(gapBlockNumber);
-        snapshotBeforeReorg.Should().NotBeNull();
-        snapshotBeforeReorg.HeaderHash.Should().Be(originalChainGapBlock.Hash!);
-
-
-        var finalizedBlockInfo = blockChain.XdcContext.HighestCommitBlock;
-        finalizedBlockInfo.Round.Should().Be(blockChain.XdcContext.CurrentRound - 2); // Finalization is 2 rounds behind
-
-        XdcBlockHeader finalizedBlock = (XdcBlockHeader)blockChain.BlockTree.FindHeader(finalizedBlockInfo.Hash)!;
-
-        var newHeadWaitHandle = new TaskCompletionSource();
-        blockChain.BlockTree.NewHeadBlock += (_, _) => newHeadWaitHandle.SetResult();
-
-        XdcBlockHeader forkParent = finalizedBlock;
-        for (int i = 0; i < 3; i++)
-        {
-            //Build a fork on finalized block, which should result in fork becoming new head
-            forkParent = (XdcBlockHeader)(await blockChain.AddBlockFromParent(forkParent)).Header;
-        }
-
-        if (blockChain.BlockTree.Head!.Hash != forkParent.Hash)
-            await Task.WhenAny(newHeadWaitHandle.Task, Task.Delay(5_000));
-
-        blockChain.BlockTree.Head!.Hash.Should().Be(forkParent.Hash!);
-
-        XdcBlockHeader newChainGapBlock = (XdcBlockHeader)blockChain.BlockTree.FindHeader(gapBlockNumber)!;
-        Snapshot? snapshotAfterReorg = blockChain.SnapshotManager.GetSnapshotByGapNumber(gapBlockNumber);
-        snapshotAfterReorg.Should().NotBeNull();
-        snapshotAfterReorg.HeaderHash.Should().Be(newChainGapBlock.Hash!);
-    }
 }

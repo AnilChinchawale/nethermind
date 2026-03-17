@@ -36,11 +36,6 @@ internal class EpochSwitchManager : IEpochSwitchManager
     {
         var xdcSpec = _xdcSpecProvider.GetXdcSpec(header);
 
-        if (header.Number < xdcSpec.SwitchBlock)
-        {
-            return header.Number % xdcSpec.EpochLength == 0;
-        }
-
         if (header.Number == xdcSpec.SwitchBlock)
         {
             return true;

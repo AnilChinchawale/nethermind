@@ -373,18 +373,13 @@ public class RewardTests
 
         var blockHeaders = new XdcBlockHeader[chainSize];
         var blocks = new Block[chainSize];
-        Address[] masternodeAddresses = masternodes.Select(m => m.Address).ToArray();
         for (int i = 0; i <= epochLength * 2; i++)
         {
-            XdcBlockHeaderBuilder builder = Build.A.XdcBlockHeader()
+            blockHeaders[i] = Build.A.XdcBlockHeader()
                 .WithNumber(i)
-                .WithValidators(masternodeAddresses);
-            // Block 0 is the v1 genesis (SwitchBlock=0), so ExtraData must use v1 format
-            if (i == 0)
-                builder.WithExtraData(XdcTestHelper.BuildV1ExtraData(masternodeAddresses));
-            else
-                builder.WithExtraConsensusData(new ExtraFieldsV2((ulong)i, Build.A.QuorumCertificate().TestObject));
-            blockHeaders[i] = builder.TestObject;
+                .WithValidators(masternodes.Select(m => m.Address).ToArray())
+                .WithExtraConsensusData(new ExtraFieldsV2((ulong)i, Build.A.QuorumCertificate().TestObject))
+                .TestObject;
             blocks[i] = new Block(blockHeaders[i]);
         }
 
