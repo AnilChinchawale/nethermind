@@ -1,0 +1,52 @@
+# XDC Nethermind (nmx) - Local Build with Bug Fix
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:9.0-noble AS build
+
+ARG BUILD_CONFIG=release
+ARG CI=true
+ARG TARGETARCH
+
+WORKDIR /nethermind
+
+# Copy local source code with bug fix
+COPY . .
+
+RUN arch=$([ "$TARGETARCH" = "amd64" ] && echo "x64" || echo "$TARGETARCH") && \
+  rid="linux-${arch}" && \
+  cd src/Nethermind/Nethermind.Runner && \
+  dotnet restore -r $rid && \
+  dotnet publish -c $BUILD_CONFIG -r $rid -o /publish --no-restore --self-contained \
+    -p:PublishSingleFile=true
+
+# Create symlink for backward compatibility
+RUN ls -la /publish/nethermind* /publish/Nethermind* 2>/dev/null || true && \
+  if [ -f /publish/nethermind ]; then ln -sf nethermind /publish/Nethermind.Runner; \
+  elif [ -f /publish/Nethermind.Runner ]; then ln -sf Nethermind.Runner /publish/nethermind; fi
+
+FROM mcr.microsoft.com/dotnet/aspnet:9.0-noble
+
+WORKDIR /nethermind
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl jq && rm -rf /var/lib/apt/lists/*
+RUN useradd -m nethermind 2>/dev/null || true
+RUN mkdir -p /data/nethermind /nethermind/keystore /nethermind/logs /nethermind/nethermind_db && \
+    chown -R nethermind:nethermind /data /nethermind
+
+VOLUME /nethermind/keystore
+VOLUME /nethermind/logs
+VOLUME /nethermind/nethermind_db
+
+COPY --from=build /publish .
+RUN chown -R nethermind:nethermind /nethermind
+
+USER nethermind
+WORKDIR /data
+
+EXPOSE 8557 8558 30305 30305/udp
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+    CMD curl -sf http://localhost:8557/health > /dev/null || exit 1
+
+LABEL org.opencontainers.image.title="XDC Nethermind" \
+      org.opencontainers.image.description="XDC Network Nethermind client"
+
+ENTRYPOINT ["/nethermind/nethermind"]

@@ -214,3 +214,49 @@ public static class XdcStateRootCache
         public Dictionary<string, string>? RemoteToLocalMappings { get; set; }
     }
 }
+
+    /// <summary>
+    /// Given a local (computed) state root, find the original remote (geth) state root.
+    /// Used for outbound messages — we need to advertise geth-compatible roots to peers.
+    /// </summary>
+    public static Hash256? FindRemoteRootForLocal(Hash256 localRoot)
+    {
+        foreach (var kvp in _remoteToLocal)
+        {
+            if (kvp.Value == localRoot)
+                return kvp.Key;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Get the remote (geth) state root for a specific block number.
+    /// </summary>
+    public static Hash256? GetRemoteStateRoot(long blockNumber) =>
+        _remoteRootsByBlock.TryGetValue(blockNumber, out var root) ? root : null;
+
+    /// <summary>
+    /// Replace local state root with remote (geth) root in a header for outbound P2P messages.
+    /// Returns original header if no mapping exists.
+    /// </summary>
+    public static BlockHeader SwapStateRootForOutbound(BlockHeader header)
+    {
+        if (header.StateRoot is null) return header;
+        
+        // Try block number lookup first (most reliable)
+        var remoteRoot = GetRemoteStateRoot(header.Number);
+        if (remoteRoot is not null && remoteRoot != header.StateRoot)
+        {
+            header.StateRoot = remoteRoot;
+            return header;
+        }
+        
+        // Fallback: reverse lookup from local→remote mapping
+        var remote = FindRemoteRootForLocal(header.StateRoot);
+        if (remote is not null)
+        {
+            header.StateRoot = remote;
+        }
+        
+        return header;
+    }
