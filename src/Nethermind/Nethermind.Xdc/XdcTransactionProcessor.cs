@@ -1,228 +1,232 @@
-// SPDX-FileCopyrightText: 2026 Anil Chinchawale
+// SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
 using Nethermind.Evm;
+using Nethermind.Evm.GasPolicy;
 using Nethermind.Evm.State;
-using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Evm.Tracing;
+using Nethermind.Evm.Tracing.State;
+using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Int256;
 using Nethermind.Logging;
-using Nethermind.State;
-using System;
-using System.Collections.Generic;
+using Nethermind.Xdc.Contracts;
+using Nethermind.Xdc.Spec;
 
 namespace Nethermind.Xdc;
 
-/// <summary>
-/// XDC-specific transaction processor that handles special system transactions.
-/// 
-/// In XDPoS, transactions to system contracts (0x88, 0x89, 0x90) have special handling:
-/// - BlockSigners (0x89): Bypass normal EVM execution entirely
-/// - Validator (0x88): Skip balance validation for staking operations
-/// - Randomize (0x90): Skip balance validation
-/// 
-/// This matches the behavior in geth-xdc which allows these consensus-level
-/// transactions even when the sender has insufficient balance.
-/// 
-/// Reference: https://github.com/XinFinOrg/XDPoSChain/blob/master/core/state_processor.go
-/// </summary>
-public class XdcTransactionProcessor : TransactionProcessorBase
+internal class XdcTransactionProcessor : EthereumTransactionProcessorBase
 {
+    private readonly IMasternodeVotingContract _masternodeVotingContract;
+
     public XdcTransactionProcessor(
         ITransactionProcessor.IBlobBaseFeeCalculator blobBaseFeeCalculator,
         ISpecProvider? specProvider,
         IWorldState? worldState,
         IVirtualMachine? virtualMachine,
         ICodeInfoRepository? codeInfoRepository,
-        ILogManager? logManager)
-        : base(blobBaseFeeCalculator, specProvider, worldState, virtualMachine, codeInfoRepository, logManager)
+        ILogManager? logManager,
+        IMasternodeVotingContract masternodeVotingContract)
+        : base(
+            blobBaseFeeCalculator,
+            specProvider,
+            worldState,
+            virtualMachine,
+            codeInfoRepository,
+            logManager)
     {
+        _masternodeVotingContract = masternodeVotingContract;
     }
 
-    // TIPSigning fork block for XDC mainnet - special handling only applies after this block
-    private const long TIPSigningBlock = 3_000_000;
-
-    protected override TransactionResult Execute(
+    protected override void PayFees(
         Transaction tx,
+        BlockHeader header,
+        IReleaseSpec spec,
         ITxTracer tracer,
-        ExecutionOptions opts)
+        in TransactionSubstate substate,
+        long spentGas,
+        in UInt256 premiumPerGas,
+        in UInt256 blobBaseFee,
+        int statusCode)
     {
-        // Get current block header to check block number
-        BlockHeader header = VirtualMachine.BlockExecutionContext.Header;
+        IXdcReleaseSpec xdcSpec = (IXdcReleaseSpec)spec;
 
-        // Only apply special BlockSigners handling after TIPSigning fork (block 3,000,000)
-        // Before this fork, BlockSigners transactions are processed normally through EVM
-        if (header.Number >= TIPSigningBlock && IsBlockSignersTransaction(tx))
+        if (tx.IsSpecialTransaction(xdcSpec)) return;
+
+        if (!xdcSpec.IsTipTrc21FeeEnabled)
         {
-            return ApplySignTransaction(tx, tracer, opts);
+            base.PayFees(tx, header, spec, tracer, substate, spentGas, premiumPerGas, blobBaseFee, statusCode);
+            return;
         }
 
-        // Normal transaction processing (EVM execution)
+        Address owner = _masternodeVotingContract.GetCandidateOwner(WorldState, header.GasBeneficiary!);
+
+        if (owner is null || owner == Address.Zero)
+            return;
+
+        UInt256 effectiveGasPrice = CalculateEffectiveGasPrice(tx, spec.IsEip1559Enabled, header.BaseFeePerGas, out UInt256 opcodeGasPrice);
+        UInt256 fee = effectiveGasPrice * (ulong)spentGas;
+
+        WorldState.AddToBalanceAndCreateIfNotExists(owner, fee, spec);
+
+        if (tracer.IsTracingFees)
+            tracer.ReportFees(fee, UInt256.Zero);
+    }
+
+    protected override TransactionResult BuyGas(Transaction tx, IReleaseSpec spec, ITxTracer tracer, ExecutionOptions opts,
+        in UInt256 effectiveGasPrice, out UInt256 premiumPerGas, out UInt256 senderReservedGasPayment,
+        out UInt256 blobBaseFee)
+    {
+        if (tx.RequiresSpecialHandling((XdcReleaseSpec)spec) || tx.IsSpecialTransaction((XdcReleaseSpec)spec))
+        {
+            premiumPerGas = 0;
+            senderReservedGasPayment = 0;
+            blobBaseFee = 0;
+            return TransactionResult.Ok;
+        }
+        return base.BuyGas(tx, spec, tracer, opts, effectiveGasPrice, out premiumPerGas, out senderReservedGasPayment, out blobBaseFee);
+    }
+
+    protected override TransactionResult ValidateSender(Transaction tx, BlockHeader header, IReleaseSpec spec, ITxTracer tracer, ExecutionOptions opts)
+    {
+        var xdcSpec = spec as XdcReleaseSpec;
+        Address target = tx.To;
+        Address sender = tx.SenderAddress;
+
+        if (xdcSpec.IsBlackListingEnabled)
+        {
+            if (IsBlackListed(xdcSpec, sender) || IsBlackListed(xdcSpec, target))
+            {
+                // Skip processing special transactions if either sender or recipient is blacklisted
+                return XdcTransactionResult.ContainsBlacklistedAddress;
+            }
+        }
+
+        return base.ValidateSender(tx, header, spec, tracer, opts);
+    }
+
+    private bool IsBlackListed(IXdcReleaseSpec spec, Address sender)
+    {
+        return spec.BlackListedAddresses.Contains(sender);
+    }
+
+    protected override TransactionResult Execute(Transaction tx, ITxTracer tracer, ExecutionOptions opts)
+    {
+        BlockHeader header = VirtualMachine.BlockExecutionContext.Header;
+        IXdcReleaseSpec spec = GetSpec(header) as IXdcReleaseSpec;
+
+        if (tx.RequiresSpecialHandling(spec))
+            return ExecuteSpecialTransaction(tx, tracer, opts);
+
         return base.Execute(tx, tracer, opts);
     }
 
-    /// <summary>
-    /// Checks if a transaction is destined for the BlockSigners contract (0x89).
-    /// Matches geth-xdc: to == BlockSignersBinary (0x89)
-    /// </summary>
-    private bool IsBlockSignersTransaction(Transaction transaction)
+    protected override TransactionResult IncrementNonce(Transaction tx, BlockHeader header, IReleaseSpec spec, ITxTracer tracer, ExecutionOptions opts)
     {
-        return transaction.To is not null
-            && transaction.To == XdcConstants.BlockSignersAddress;
-    }
-
-    /// <summary>
-    /// Checks if a transaction is destined for an XDPoS system contract.
-    /// System contracts include:
-    /// - Validator (0x88): Masternode staking/voting
-    /// - BlockSigners (0x89): Block signing records  
-    /// - Randomize (0x90): Randomization for validator selection
-    /// 
-    /// XDC geth allows transactions to these contracts even when the sender
-    /// has insufficient balance, as they are consensus-level operations.
-    /// </summary>
-    private bool IsXdcSystemContractTransaction(Transaction transaction)
-    {
-        if (transaction.To is null) return false;
-
-        return transaction.To == XdcConstants.ValidatorAddress ||
-               transaction.To == XdcConstants.BlockSignersAddress ||
-               transaction.To == XdcConstants.RandomizeAddress;
-    }
-
-    /// <summary>
-    /// Override BuyGas to skip balance validation for XDPoS system contract transactions.
-    /// 
-    /// XDC geth allows validator staking transactions (to 0x88) even when the sender
-    /// has insufficient balance. This is because these are consensus-level operations
-    /// that transfer value as part of masternode staking, not regular user transfers.
-    /// 
-    /// This fixes the sync issue at block 1,755,834 on Apothem where a 10M XDC
-    /// validator staking tx was sent from an account with 0 balance.
-    /// 
-    /// Issue: https://github.com/AnilChinchawale/nethermind/issues/38
-    /// </summary>
-    protected override TransactionResult BuyGas(
-        Transaction tx,
-        IReleaseSpec spec,
-        ITxTracer tracer,
-        ExecutionOptions opts,
-        in UInt256 effectiveGasPrice,
-        out UInt256 premiumPerGas,
-        out UInt256 senderReservedGasPayment,
-        out UInt256 blobBaseFee)
-    {
-        // For XDPoS system contract transactions, skip balance validation
-        // This matches geth-xdc behavior where validator/staking operations
-        // are allowed even with insufficient sender balance
-        if (IsXdcSystemContractTransaction(tx))
+        var xdcSpec = (IXdcReleaseSpec)spec;
+        if (tx.RequiresSpecialHandling(xdcSpec))
         {
-            if (Logger.IsDebug)
-                Logger.Debug($"XDC system contract tx to {tx.To}, skipping balance validation");
-
-            // Force skip validation for XDPoS system contracts
-            opts |= ExecutionOptions.SkipValidation;
-        }
-
-        return base.BuyGas(tx, spec, tracer, opts, in effectiveGasPrice,
-            out premiumPerGas, out senderReservedGasPayment, out blobBaseFee);
-    }
-
-    /// <summary>
-    /// Apply BlockSigners transaction - special handling that bypasses EVM.
-    /// 
-    /// This replicates geth-xdc's ApplySignTransaction() behavior:
-    /// 1. Deduct gas cost from sender (pre-payment)
-    /// 2. Get sender and validate nonce
-    /// 3. Increment nonce
-    /// 4. Finalize state (apply pending changes)
-    /// 5. Create receipt with the ORIGINAL gas limit (for block header validation)
-    /// 6. Add log entry for BlockSigners
-    /// 7. Do NOT execute any EVM code
-    /// 
-    /// Note: The receipt shows gasUsed = tx.GasLimit (107558), not 0.
-    /// This is because the gas is prepaid and must be recorded in the block header.
-    /// 
-    /// Reference implementation:
-    /// https://github.com/XinFinOrg/XDPoSChain/blob/master/core/state_processor.go#L312
-    /// </summary>
-    private TransactionResult ApplySignTransaction(
-        Transaction tx,
-        ITxTracer tracer,
-        ExecutionOptions opts)
-    {
-        try
-        {
-            // Get current block header for context
-            BlockHeader header = VirtualMachine.BlockExecutionContext.Header;
-            IReleaseSpec spec = GetSpec(header);
-
-            // Get sender address (must be already set)
-            Address sender = tx.SenderAddress!;
-
-            // Create account if it doesn't exist (geth-xdc behavior)
-            WorldState.CreateAccountIfNotExists(sender, UInt256.Zero, UInt256.Zero);
-
-            // Deduct gas cost from sender (pre-payment) - IMPORTANT for state root
-            UInt256 gasCost = (UInt256)tx.GasLimit * tx.GasPrice;
-            UInt256 senderBalance = WorldState.GetBalance(sender);
-            if (senderBalance < gasCost)
+            if (tx.IsSignTransaction(xdcSpec))
             {
-                return TransactionResult.InsufficientSenderBalance;
-            }
-            WorldState.SubtractFromBalance(sender, gasCost, spec);
+                var nonce = WorldState.GetNonce(tx.SenderAddress);
 
-            // Validate and increment nonce (geth-xdc behavior)
-            UInt256 nonce = WorldState.GetNonce(sender);
-            if (nonce != tx.Nonce)
-            {
-                if (Logger.IsDebug)
-                    Logger.Debug($"BlockSigners tx invalid nonce: expected {nonce}, got {tx.Nonce}");
+                if (nonce < tx.Nonce)
+                {
+                    return XdcTransactionResult.NonceTooHigh;
+                }
+                else if (nonce > tx.Nonce)
+                {
+                    return XdcTransactionResult.NonceTooLow;
+                }
 
-                return TransactionResult.WrongTransactionNonce;
-            }
-            WorldState.IncrementNonce(sender);
-
-            // Commit state to apply changes
-            WorldState.Commit(spec);
-
-            // Increment header.GasUsed to match expected block gas
-            // This is critical - without this, block validation fails with HeaderGasUsedMismatch
-            header.GasUsed += tx.GasLimit;
-
-            // Create log entry for BlockSigners (matching geth-xdc)
-            var logEntry = new LogEntry(
-                XdcConstants.BlockSignersAddress,
-                Array.Empty<byte>(),
-                Array.Empty<Hash256>());
-
-            // Report to tracer with the ORIGINAL gas limit (107558)
-            // This ensures the receipt cumulative gas used matches
-            if (tracer.IsTracingReceipt)
-            {
-                var gasConsumed = new GasConsumed(tx.GasLimit, tx.GasLimit);
-                tracer.MarkAsSuccess(
-                    XdcConstants.BlockSignersAddress,
-                    gasConsumed, // Gas used = tx.GasLimit (107558)
-                    Array.Empty<byte>(),
-                    new[] { logEntry });
+                WorldState.IncrementNonce(tx.SenderAddress);
             }
 
-            if (Logger.IsDebug)
-                Logger.Debug($"Applied BlockSigners transaction from {sender} at block {header.Number}, gas used: {tx.GasLimit}");
-
-            // Return success
             return TransactionResult.Ok;
         }
-        catch (Exception ex)
-        {
-            if (Logger.IsError)
-                Logger.Error($"Failed to apply BlockSigners transaction: {ex.Message}");
 
-            return TransactionResult.MalformedTransaction;
+        return base.IncrementNonce(tx, header, spec, tracer, opts);
+    }
+
+    protected override TransactionResult ValidateGas(Transaction tx, BlockHeader header, long minGasRequired)
+    {
+        var spec = SpecProvider.GetXdcSpec((XdcBlockHeader)header);
+        if (tx.RequiresSpecialHandling(spec))
+        {
+            return TransactionResult.Ok;
         }
+        return base.ValidateGas(tx, header, minGasRequired);
+    }
+
+    protected override UInt256 CalculateEffectiveGasPrice(Transaction tx, bool eip1559Enabled, in UInt256 baseFee, out UInt256 opcodeGasPrice)
+    {
+        // IMPORTANT: if we override the effective gas price to 0, we must also set opcodeGasPrice to 0.
+        // TxExecutionContext is created with opcodeGasPrice and is later used for refunding, tracing, etc.
+        //
+        // Also: IsSpecialTransaction requires the IXdcReleaseSpec to decide Randomize vs BlockSigner, so
+        // we need the current block spec here.
+        IXdcReleaseSpec xdcSpec = (IXdcReleaseSpec)VirtualMachine.BlockExecutionContext.Spec;
+
+        if (tx.IsSpecialTransaction(xdcSpec))
+        {
+            opcodeGasPrice = UInt256.Zero;
+            return UInt256.Zero;
+        }
+
+        return base.CalculateEffectiveGasPrice(tx, eip1559Enabled, in baseFee, out opcodeGasPrice);
+    }
+
+    protected override IntrinsicGas<EthereumGasPolicy> CalculateIntrinsicGas(Transaction tx, IReleaseSpec spec) =>
+        tx.RequiresSpecialHandling((IXdcReleaseSpec)spec)
+            ? new IntrinsicGas<EthereumGasPolicy>()
+            : base.CalculateIntrinsicGas(tx, spec);
+
+    private TransactionResult ExecuteSpecialTransaction(Transaction tx, ITxTracer tracer, ExecutionOptions opts)
+    {
+        BlockHeader header = VirtualMachine.BlockExecutionContext.Header;
+        IXdcReleaseSpec spec = GetSpec(header) as IXdcReleaseSpec;
+
+        bool restore = opts.HasFlag(ExecutionOptions.Restore);
+
+        // maybe a better approach would be adding an XdcGasPolicy
+        TransactionResult result;
+        _ = RecoverSenderIfNeeded(tx, spec, opts, UInt256.Zero);
+        IntrinsicGas<EthereumGasPolicy> intrinsicGas = CalculateIntrinsicGas(tx, spec);
+
+        if (!(result = ValidateSender(tx, header, spec, tracer, opts))
+            || !(result = IncrementNonce(tx, header, spec, tracer, opts))
+            || !(result = ValidateStatic(tx, header, spec, opts, intrinsicGas)))
+        {
+            if (restore)
+            {
+                WorldState.Reset(resetBlockChanges: false);
+            }
+            return result;
+        }
+
+        // SignTx special stuff has already been handled above
+        return ProcessEmptyTransaction(tx, tracer, spec);
+    }
+
+    private TransactionResult ProcessEmptyTransaction(Transaction tx, ITxTracer tracer, IReleaseSpec spec)
+    {
+        WorldState.Commit(spec, tracer.IsTracingState ? tracer : NullStateTracer.Instance, commitRoots: !spec.IsEip658Enabled);
+
+        if (tracer.IsTracingReceipt)
+        {
+            Hash256 stateRoot = null;
+            if (!spec.IsEip658Enabled)
+            {
+                WorldState.RecalculateStateRoot();
+                stateRoot = WorldState.StateRoot;
+            }
+
+            var log = new LogEntry(tx.To, [], []);
+            tracer.MarkAsSuccess(tx.To, 0, [], [log], stateRoot);
+        }
+
+        return TransactionResult.Ok;
     }
 }
