@@ -1,530 +1,233 @@
-// SPDX-FileCopyrightText: 2026 Anil Chinchawale
+// SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Nethermind.Blockchain;
 using Nethermind.Consensus.Rewards;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
-using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Int256;
-using Nethermind.Logging;
-using Nethermind.Evm.State;
+using Nethermind.Xdc.Spec;
+using System;
+using System.Collections.Generic;
 using Nethermind.Crypto;
 using Nethermind.Xdc.Contracts;
-using Nethermind.Xdc.Spec;
+using Nethermind.Evm.TransactionProcessing;
 
-namespace Nethermind.Xdc;
-
-/// <summary>
-/// XDPoS checkpoint reward calculator.
-/// Ported from geth-xdc (eth/hooks/engine_v1_hooks.go, contracts/utils.go).
-/// 
-/// At every 900-block checkpoint (except block 900):
-/// 1. Count signing transactions from previous epoch (blocks to 0x89)
-/// 2. Only count qualifying blocks (block % MergeSignRange == 0, since TIP2019 active)
-/// 3. Distribute chainReward proportionally to sign count
-/// 4. For each signer: 90% to owner (from 0x88), 10% to foundation
-/// </summary>
-public class XdcRewardCalculator : IRewardCalculator, IRewardCalculatorSource
+namespace Nethermind.Xdc
 {
-    private const long RewardCheckpoint = 900;
-    private const int MergeSignRange = 15;
-    private const ulong BlocksPerYear = 15768000;
-    private const ulong TIPNoHalvingMNReward = 38383838;
-    private const int RewardMasterPercent = 90;
-    private const int RewardFoundationPercent = 10;
-
-    private static readonly Address BlockSignersContract = new("0x0000000000000000000000000000000000000089");
-    private static readonly Address ValidatorContract = new("0x0000000000000000000000000000000000000088");
-
-    private readonly IBlockTree? _blockTree;
-    private readonly IWorldState? _stateProvider;
-    private readonly IEthereumEcdsa? _ecdsa;
-    private readonly ILogger _logger;
-    private readonly Address _foundationWallet;
-
-    // V2 API fields (used by RewardTests.cs)
-    private readonly IEpochSwitchManager? _epochSwitchManager;
-    private readonly ISpecProvider? _specProvider;
-    private readonly IMasternodeVotingContract? _votingContract;
-    private readonly bool _useV2Api;
-
-    public XdcRewardCalculator(ILogManager logManager, IBlockTree? blockTree = null, IWorldState? stateProvider = null, IEthereumEcdsa? ecdsa = null, Address? foundationWallet = null)
-    {
-        _blockTree = blockTree;
-        _stateProvider = stateProvider;
-        _ecdsa = ecdsa;
-        _logger = logManager?.GetClassLogger() ?? NullLogger.Instance;
-        _foundationWallet = foundationWallet ?? XdcConstants.FoundationWalletAddress;
-        _useV2Api = false;
-    }
-
     /// <summary>
-    /// V2 constructor for integration tests (RewardTests.cs).
-    /// Uses IEpochSwitchManager to detect epoch boundaries and IMasternodeVotingContract
-    /// to resolve owner addresses.
+    /// Reward model (current mainnet):
+    /// - Rewards are paid only at epoch checkpoints (number % EpochLength == 0).
+    /// - For now we **ignore** TIPUpgradeReward behavior because on mainnet
+    ///   the upgrade activation is set far in the future (effectively “not active”).
+    ///   When TIPUpgradeReward activates, protector/observer beneficiaries must be added.
+    /// - Current split implemented here: 90% to masternode owner, 10% to foundation.
     /// </summary>
-    public XdcRewardCalculator(
-        IEpochSwitchManager epochSwitchManager,
-        ISpecProvider specProvider,
-        IBlockTree blockTree,
-        IMasternodeVotingContract votingContract)
+    public class XdcRewardCalculator : IRewardCalculator
     {
-        _epochSwitchManager = epochSwitchManager ?? throw new ArgumentNullException(nameof(epochSwitchManager));
-        _specProvider = specProvider ?? throw new ArgumentNullException(nameof(specProvider));
-        _blockTree = blockTree ?? throw new ArgumentNullException(nameof(blockTree));
-        _votingContract = votingContract ?? throw new ArgumentNullException(nameof(votingContract));
-        _logger = NullLogger.Instance;
-        _foundationWallet = XdcConstants.FoundationWalletAddress;
-        _useV2Api = true;
-    }
+        // XDC rule: signing transactions are sampled/merged every N blocks (N=15 on XDC).
+        // Only block numbers that are multiples of MergeSignRange are considered when tallying signers.
+        private readonly EthereumEcdsa _ethereumEcdsa;
+        private readonly IEpochSwitchManager _epochSwitchManager;
+        private readonly ISpecProvider _specProvider;
+        private readonly IBlockTree _blockTree;
+        private readonly IMasternodeVotingContract _masternodeVotingContract;
+        private readonly ISigningTxCache _signingTxCache;
+        private readonly ITransactionProcessor _transactionProcessor;
 
-    public IRewardCalculator Get(ITransactionProcessor processor) => this;
-
-    /// <summary>
-    /// Calculate proportional reward for a signer based on their sign count.
-    /// Formula: (totalReward / totalSigners) * signCount
-    /// Uses integer division to match geth-xdc rounding behavior.
-    /// </summary>
-    public UInt256 CalculateProportionalReward(long signCount, long totalSigners, UInt256 totalReward)
-    {
-        if (totalSigners == 0) return UInt256.Zero;
-        return (totalReward / (UInt256)totalSigners) * (UInt256)signCount;
-    }
-
-    /// <summary>
-    /// Distribute a reward between the owner (90%) and foundation (10%).
-    /// Returns the owner's BlockReward and the foundation's share as a separate value.
-    /// </summary>
-    public (BlockReward holderReward, UInt256 foundationReward) DistributeRewards(
-        Address signer,
-        UInt256 calcReward,
-        XdcBlockHeader header)
-    {
-        // Resolve owner from voting contract
-        Address owner = _votingContract?.GetCandidateOwner(header, signer) ?? signer;
-        if (owner == Address.Zero) owner = signer;
-
-        // 90% to owner, 10% to foundation (using integer division)
-        UInt256 ownerReward = calcReward * (UInt256)RewardMasterPercent / 100;
-        UInt256 foundationReward = calcReward * (UInt256)RewardFoundationPercent / 100;
-
-        return (new BlockReward(owner, ownerReward, BlockRewardType.Block), foundationReward);
-    }
-
-    public BlockReward[] CalculateRewards(Block block)
-    {
-        if (_useV2Api)
-            return CalculateRewardsV2(block);
-
-        long number = block.Number;
-
-        // Geth condition: number > 0 && number - rCheckpoint > 0
-        if (block.IsGenesis || number % RewardCheckpoint != 0 || number <= RewardCheckpoint)
-            return Array.Empty<BlockReward>();
-
-        try
+        public XdcRewardCalculator(
+            IEpochSwitchManager epochSwitchManager,
+            ISpecProvider specProvider,
+            IBlockTree blockTree,
+            IMasternodeVotingContract masternodeVotingContract,
+            ISigningTxCache signingTxCache,
+            ITransactionProcessor transactionProcessor)
         {
-            return CalculateCheckpointRewards(block);
+            _ethereumEcdsa = new EthereumEcdsa(specProvider.ChainId);
+            _epochSwitchManager = epochSwitchManager;
+            _specProvider = specProvider;
+            _blockTree = blockTree;
+            _masternodeVotingContract = masternodeVotingContract;
+            _signingTxCache = signingTxCache;
+            _transactionProcessor = transactionProcessor;
         }
-        catch (Exception ex)
+        /// <summary>
+        /// Calculates block rewards according to XDPoS consensus rules.
+        ///
+        /// For XDPoS, rewards are only distributed at epoch checkpoints (blocks where number % 900 == 0).
+        /// At these checkpoints, rewards are calculated based on masternode signature counts during
+        /// the previous epoch and distributed according to the 90/10 split model.
+        /// </summary>
+        /// <param name="block">The block to calculate rewards for</param>
+        /// <returns>Array of BlockReward objects for all reward recipients</returns>
+        public BlockReward[] CalculateRewards(Block block)
         {
-            _logger.Error($"Error calculating rewards for block {number}", ex);
-            return Array.Empty<BlockReward>();
-        }
-    }
+            if (block is null)
+                throw new ArgumentNullException(nameof(block));
+            if (block.Header is not XdcBlockHeader xdcHeader)
+                throw new InvalidOperationException("Only supports XDC headers");
+            if (xdcHeader.Number == 0)
+                return Array.Empty<BlockReward>();
 
-    /// <summary>
-    /// V2 reward calculation using IEpochSwitchManager and IXdcReleaseSpec.
-    /// Used by integration tests (RewardTests.cs).
-    /// </summary>
-    private BlockReward[] CalculateRewardsV2(Block block)
-    {
-        if (_blockTree is null || _epochSwitchManager is null || _specProvider is null)
-            return Array.Empty<BlockReward>();
+            // Rewards in XDC are calculated only if it's an epoch switch block
+            if (!_epochSwitchManager.IsEpochSwitchAtBlock(xdcHeader)) return Array.Empty<BlockReward>();
 
-        var header = block.Header as XdcBlockHeader;
-        if (header is null)
-            return Array.Empty<BlockReward>();
+            var number = xdcHeader.Number;
+            IXdcReleaseSpec spec = _specProvider.GetXdcSpec(xdcHeader, xdcHeader.ExtraConsensusData.BlockRound);
+            if (number == spec.SwitchBlock + 1) return Array.Empty<BlockReward>();
 
-        // Only calculate at epoch switches (checkpoints)
-        if (!_epochSwitchManager.IsEpochSwitchAtBlock(header))
-            return Array.Empty<BlockReward>();
+            Address foundationWalletAddr = spec.FoundationWallet;
+            if (foundationWalletAddr == default || foundationWalletAddr == Address.Zero) throw new InvalidOperationException("Foundation wallet address cannot be empty");
 
-        // Skip first epoch (no previous epoch to count signatures from)
-        var spec = _specProvider.GetSpec(block.Header) as IXdcReleaseSpec;
-        if (spec is null)
-            return Array.Empty<BlockReward>();
+            var (signers, count) = GetSigningTxCount(xdcHeader, spec);
 
-        long epochLength = spec.EpochLength;
-        if (block.Number <= epochLength)
-            return Array.Empty<BlockReward>();
+            UInt256 chainReward = (UInt256)spec.Reward * Unit.Ether;
+            Dictionary<Address, UInt256> rewardSigners = CalculateRewardForSigners(chainReward, signers, count);
 
-        // Get total reward in wei
-        UInt256 totalReward = (UInt256)spec.Reward * 1_000_000_000_000_000_000;
-        long mergeSignRange = spec.MergeSignRange;
-        Address blockSignerContract = spec.BlockSignerContract;
-        Address foundationWallet = spec.FoundationWallet;
-
-        // Count signing transactions from previous epoch window
-        // Window: [number - 2*epochLength + 1, number - 1]
-        long windowStart = block.Number - 2 * epochLength + 1;
-        long windowEnd = block.Number - 1;
-        if (windowStart < 1) windowStart = 1;
-
-        // Build map: blockHash -> list of signers
-        var blockHashSigners = new Dictionary<Hash256, HashSet<Address>>();
-        var blockNumToHash = new Dictionary<long, Hash256>();
-
-        // First pass: collect all signing txs
-        for (long i = windowStart; i <= windowEnd; i++)
-        {
-            Block? pastBlock = _blockTree.FindBlock(i, BlockTreeLookupOptions.None);
-            if (pastBlock is null) continue;
-
-            blockNumToHash[i] = pastBlock.Hash!;
-
-            foreach (var tx in pastBlock.Transactions)
+            UInt256 totalFoundationWalletReward = UInt256.Zero;
+            var rewards = new List<BlockReward>();
+            foreach (var (signer, reward) in rewardSigners)
             {
-                if (tx.To != blockSignerContract) continue;
+                (BlockReward holderReward, UInt256 foundationWalletReward) = DistributeRewards(signer, reward, xdcHeader);
+                totalFoundationWalletReward += foundationWalletReward;
+                rewards.Add(holderReward);
+            }
+            if (totalFoundationWalletReward > UInt256.Zero) rewards.Add(new BlockReward(foundationWalletAddr, totalFoundationWalletReward));
+            return rewards.ToArray();
+        }
 
-                Address? sender = tx.SenderAddress;
-                if (sender is null) continue;
+        private (Dictionary<Address, long> Signers, long Count) GetSigningTxCount(XdcBlockHeader epochHeader, IXdcReleaseSpec spec)
+        {
+            var signers = new Dictionary<Address, long>();
+            long number = epochHeader.Number;
+            if (number == 0) return (signers, 0);
 
-                // Extract signed block number and hash from tx data
-                byte[] txData = tx.Data.ToArray();
-                if (txData.Length < 64) continue;
+            long signEpochCount = 1, rewardEpochCount = 2, epochCount = 0, endBlockNumber = 0, startBlockNumber = 0, signingCount = 0;
 
-                // First 32 bytes: block number (big-endian UInt256)
-                var signedBlockNum = new UInt256(txData.AsSpan(0, 32), isBigEndian: true);
-                // Last 32 bytes: block hash
-                var signedBlockHash = new Hash256(txData.AsSpan(32, 32));
+            var blockNumberToHash = new Dictionary<long, Hash256>();
+            var hashToSigningAddress = new Dictionary<Hash256, HashSet<Address>>();
+            var masternodes = new HashSet<Address>();
+            var mergeSignRange = spec.MergeSignRange;
 
-                if (!blockHashSigners.TryGetValue(signedBlockHash, out var signers))
+            XdcBlockHeader h = epochHeader;
+            for (long i = number - 1; i >= 0; i--)
+            {
+                Hash256 parentHash = h.ParentHash;
+                h = _blockTree.FindHeader(parentHash!, i) as XdcBlockHeader;
+                if (h == null) throw new InvalidOperationException($"Header with hash {parentHash} not found");
+                if (_epochSwitchManager.IsEpochSwitchAtBlock(h) && h.Number != spec.SwitchBlock + 1)
                 {
-                    signers = new HashSet<Address>();
-                    blockHashSigners[signedBlockHash] = signers;
-                }
-                signers.Add(sender);
-            }
-        }
-
-        // Second pass: count signatures per qualifying block
-        var signerCounts = new Dictionary<Address, long>();
-        long totalSigners = 0;
-
-        for (long i = windowStart; i <= windowEnd; i++)
-        {
-            // Only blocks divisible by mergeSignRange qualify
-            if (i % mergeSignRange != 0) continue;
-
-            if (!blockNumToHash.TryGetValue(i, out Hash256? blkHash) || blkHash is null)
-                continue;
-
-            if (!blockHashSigners.TryGetValue(blkHash, out var signers))
-                continue;
-
-            foreach (var signer in signers)
-            {
-                signerCounts.TryGetValue(signer, out long count);
-                signerCounts[signer] = count + 1;
-                totalSigners++;
-            }
-        }
-
-        if (totalSigners == 0)
-            return Array.Empty<BlockReward>();
-
-        // Calculate rewards per signer and distribute
-        var ownerRewards = new Dictionary<Address, UInt256>();
-        UInt256 totalFoundationReward = UInt256.Zero;
-
-        foreach (var (signer, signCount) in signerCounts)
-        {
-            UInt256 calcReward = CalculateProportionalReward(signCount, totalSigners, totalReward);
-            var (holderReward, foundationReward) = DistributeRewards(signer, calcReward, header);
-
-            ownerRewards.TryGetValue(holderReward.Address, out UInt256 existing);
-            ownerRewards[holderReward.Address] = existing + holderReward.Value;
-            totalFoundationReward += foundationReward;
-        }
-
-        // Build result array
-        var result = new List<BlockReward>();
-        foreach (var (owner, reward) in ownerRewards)
-        {
-            result.Add(new BlockReward(owner, reward, BlockRewardType.Block));
-        }
-        if (totalFoundationReward > UInt256.Zero)
-        {
-            result.Add(new BlockReward(foundationWallet, totalFoundationReward, BlockRewardType.External));
-        }
-
-        return result.ToArray();
-    }
-
-    private BlockReward[] CalculateCheckpointRewards(Block block)
-    {
-        long number = block.Number;
-        // Console.WriteLine($"[XDC-REWARD] ====== Block {number} Checkpoint Rewards ======");
-
-        // 1. Calculate chain reward with inflation
-        UInt256 chainReward = RewardInflation((UInt256)250 * 1_000_000_000_000_000_000, (ulong)number);
-        // Console.WriteLine($"[XDC-REWARD] chainReward = {chainReward}");
-
-        // 2. Get masternodes from prev checkpoint header
-        long prevCheckpoint = number - RewardCheckpoint;
-        Address[] masternodes = GetMasternodesFromCheckpoint(prevCheckpoint);
-        if (masternodes.Length == 0)
-        {
-            // Console.WriteLine($"[XDC-REWARD] No masternodes found, skipping");
-            return Array.Empty<BlockReward>();
-        }
-        var masternodeSet = new HashSet<Address>(masternodes);
-
-        // 3. Count signing transactions (geth GetRewardForCheckpoint logic)
-        // prevCheckpoint2 = number - (rCheckpoint * 2) 
-        long prevCheckpoint2 = number - (RewardCheckpoint * 2);
-        long startBlock = prevCheckpoint2 + 1;
-        long endBlock = startBlock + RewardCheckpoint - 1;
-
-        // Console.WriteLine($"[XDC-REWARD] Counting signers for blocks {startBlock}-{endBlock}");
-
-        // First: collect all signing txs and map blockHash -> signers
-        // Geth iterates from (prevCheckpoint + rCheckpoint*2 - 1) down to startBlock
-        var blockHashSigners = new Dictionary<Hash256, List<Address>>();
-        var blockNumToHash = new Dictionary<long, Hash256>();
-
-        if (_blockTree is null)
-        {
-            // Console.WriteLine($"[XDC-REWARD] No block tree! Cannot count signing txs");
-            return Array.Empty<BlockReward>();
-        }
-
-        // Iterate backwards collecting signing txs (matching geth order)
-        long blocksFound = 0;
-        long txCount = 0;
-        long signingTxCount = 0;
-        for (long i = prevCheckpoint2 + (RewardCheckpoint * 2) - 1; i >= startBlock; i--)
-        {
-            Block? pastBlock = _blockTree.FindBlock(i, BlockTreeLookupOptions.None);
-            if (pastBlock is null) continue;
-            blocksFound++;
-            blockNumToHash[i] = pastBlock.Hash!;
-            txCount += pastBlock.Transactions.Length;
-
-            foreach (var tx in pastBlock.Transactions)
-            {
-                var to = tx.To?.ToString()?.ToLowerInvariant();
-                if (to == BlockSignersContract.ToString().ToLowerInvariant())
-                {
-                    // Recover sender if not available
-                    Address? sender = tx.SenderAddress;
-                    if (sender is null && _ecdsa is not null)
+                    epochCount++;
+                    if (epochCount == signEpochCount) endBlockNumber = i;
+                    if (epochCount == rewardEpochCount)
                     {
-                        try { sender = _ecdsa.RecoverAddress(tx); }
-                        catch { sender = null; }
-                    }
-                    if (sender is null) continue;
-
-                    signingTxCount++;
-                    // Console.WriteLine($"[XDC-REWARD] Found signing tx in block {pastBlock.Number} from {sender} to {to}");
-
-                    byte[] txData = tx.Data.ToArray();
-                    if (txData.Length >= 32)
-                    {
-                        byte[] hashBytes = new byte[32];
-                        Array.Copy(txData, txData.Length - 32, hashBytes, 0, 32);
-                        var signedBlockHash = new Hash256(hashBytes);
-
-                        if (!blockHashSigners.ContainsKey(signedBlockHash))
-                            blockHashSigners[signedBlockHash] = new List<Address>();
-                        blockHashSigners[signedBlockHash].Add(sender);
-                    }
-                }
-            }
-        }
-
-        // Also get hash for startBlock-1 if needed (prevCheckpoint2 header)
-        var prevHeader = _blockTree.FindBlock(prevCheckpoint2, BlockTreeLookupOptions.None);
-        if (prevHeader is not null)
-            blockNumToHash[prevCheckpoint2] = prevHeader.Hash!;
-
-        // Console.WriteLine($"[XDC-REWARD] Found {blocksFound} blocks, {txCount} total txs, {signingTxCount} signing txs");
-        // Console.WriteLine($"[XDC-REWARD] blockHashSigners has {blockHashSigners.Count} entries");
-
-        // 4. Count signers per qualifying block (matching geth logic)
-        var signerCounts = new Dictionary<Address, ulong>();
-        ulong totalSigner = 0;
-
-        long qualifyingBlocks = 0;
-        long matchedBlocks = 0;
-        for (long i = startBlock; i <= endBlock; i++)
-        {
-            // MergeSignRange filter: TIP2019 is active (block >= 1), so only i % 15 == 0
-            if (i % MergeSignRange != 0) continue;
-            qualifyingBlocks++;
-
-            // Use locally stored block hash
-            if (!blockNumToHash.TryGetValue(i, out Hash256? blkHash) || blkHash is null) continue;
-
-            if (!blockHashSigners.TryGetValue(blkHash, out var addrs) || addrs.Count == 0)
-            {
-                if (i <= 30 || i == 900)
-                    // Console.WriteLine($"[XDC-REWARD] Block {i} hash {blkHash} has NO signing tx matches");
-                    continue;
-            }
-            matchedBlocks++;
-
-            // Filter: only masternodes, no duplicates
-            var addrSigners = new HashSet<Address>();
-            foreach (var mn in masternodes)
-            {
-                foreach (var addr in addrs)
-                {
-                    if (addr == mn)
-                    {
-                        addrSigners.Add(addr);
+                        startBlockNumber = i + 1;
+                        // Get masternodes from epoch switch header
+                        if (h.Number <= spec.SwitchBlock)
+                            masternodes = new HashSet<Address>(h.ExtraData.ParseV1Masternodes());
+                        else
+                            masternodes = new HashSet<Address>(h.ValidatorsAddress!);
+                        // TIPUpgradeReward path (protector/observer selection) is currently ignored,
+                        // because on mainnet the upgrade height is set to an effectively unreachable block.
+                        // If/when that changes, we must compute protector/observer sets here.
                         break;
                     }
                 }
+
+                blockNumberToHash[i] = h.Hash;
+                Transaction[] signingTxs = _signingTxCache.GetSigningTransactions(h.Hash, i, spec);
+
+                foreach (Transaction tx in signingTxs)
+                {
+                    Hash256 blockHash = ExtractBlockHashFromSigningTxData(tx.Data);
+                    tx.SenderAddress ??= _ethereumEcdsa.RecoverAddress(tx);
+                    if (!hashToSigningAddress.ContainsKey(blockHash))
+                        hashToSigningAddress[blockHash] = new HashSet<Address>();
+                    hashToSigningAddress[blockHash].Add(tx.SenderAddress);
+                }
             }
 
-            foreach (var addr in addrSigners)
+            // Only blocks at heights that are multiples of MergeSignRange are considered.
+            // Calculate start >= startBlockNumber so that start % MergeSignRange == 0
+            long start = ((startBlockNumber + mergeSignRange - 1) / mergeSignRange) * mergeSignRange;
+            for (long i = start; i < endBlockNumber; i += mergeSignRange)
             {
-                signerCounts.TryGetValue(addr, out ulong count);
-                signerCounts[addr] = count + 1;
-                totalSigner++;
+                if (!blockNumberToHash.TryGetValue(i, out var blockHash)) continue;
+                if (!hashToSigningAddress.TryGetValue(blockHash, out var addresses)) continue;
+                foreach (Address addr in addresses)
+                {
+                    if (!masternodes.Contains(addr)) continue;
+                    if (!signers.ContainsKey(addr)) signers[addr] = 0;
+                    signers[addr] += 1;
+                    signingCount++;
+                }
             }
+            return (signers, signingCount);
         }
 
-        // Console.WriteLine($"[XDC-REWARD] qualifyingBlocks={qualifyingBlocks}, matchedBlocks={matchedBlocks}");
-        // Console.WriteLine($"[XDC-REWARD] totalSigner = {totalSigner}, unique signers = {signerCounts.Count}");
-        foreach (var (addr, cnt) in signerCounts)
-            // Console.WriteLine($"[XDC-REWARD]   {addr}: {cnt} signs");
+        private Hash256 ExtractBlockHashFromSigningTxData(ReadOnlyMemory<byte> data)
+        {
+            ReadOnlySpan<byte> span = data.Span;
+            if (span.Length != XdcConstants.SignTransactionDataLength)
+                throw new ArgumentException($"Signing tx calldata must be exactly {XdcConstants.SignTransactionDataLength} bytes.", nameof(data));
 
-            if (totalSigner == 0)
+            // 36..67: bytes32 blockHash
+            ReadOnlySpan<byte> hashBytes = span.Slice(36, 32);
+            return new Hash256(hashBytes);
+        }
+
+        private Dictionary<Address, UInt256> CalculateRewardForSigners(UInt256 totalReward,
+            Dictionary<Address, long> signers, long totalSigningCount)
+        {
+            var rewardSigners = new Dictionary<Address, UInt256>();
+            foreach (var (signer, count) in signers)
             {
-                // Console.WriteLine($"[XDC-REWARD] No signers found, skipping rewards");
-                return Array.Empty<BlockReward>();
+                UInt256 reward = CalculateProportionalReward(count, totalSigningCount, totalReward);
+                rewardSigners.Add(signer, reward);
             }
-
-        // 5. Calculate per-signer rewards (geth CalculateRewardForSigner)
-        // calcReward = (chainReward / totalSigner) * signCount
-        var signerRewards = new Dictionary<Address, UInt256>();
-        foreach (var (signer, signCount) in signerCounts)
-        {
-            UInt256 calcReward = (chainReward / (UInt256)totalSigner) * (UInt256)signCount;
-            signerRewards[signer] = calcReward;
-            // Console.WriteLine($"[XDC-REWARD]   {signer}: calcReward = {calcReward}");
+            return rewardSigners;
         }
 
-        // 6. Distribute to owners and foundation, matching geth order exactly:
-        // For each signer: AddBalance(owner, 90%), AddBalance(foundation, 10%)
-        var result = new List<BlockReward>();
-        UInt256 total = UInt256.Zero;
-
-        foreach (var (signer, calcReward) in signerRewards)
+        /// <summary>
+        /// Calculates a proportional reward based on the number of signatures.
+        /// Uses UInt256 arithmetic to maintain precision with large Wei values.
+        ///
+        /// Formula: (totalReward / totalSignatures) * signatureCount
+        /// </summary>
+        internal UInt256 CalculateProportionalReward(
+            long signatureCount,
+            long totalSignatures,
+            UInt256 totalReward)
         {
-            // Get owner from 0x88 contract (geth uses parentState)
-            Address owner = GetCandidateOwner(signer);
-            if (owner == Address.Zero) owner = signer;
-
-            // 90% to owner
-            UInt256 ownerReward = calcReward * (UInt256)RewardMasterPercent / 100;
-            result.Add(new BlockReward(owner, ownerReward, BlockRewardType.Block));
-            total += ownerReward;
-
-            // 10% to foundation  
-            UInt256 foundationReward = calcReward * (UInt256)RewardFoundationPercent / 100;
-            result.Add(new BlockReward(_foundationWallet, foundationReward, BlockRewardType.External));
-            total += foundationReward;
-
-            // Console.WriteLine($"[XDC-REWARD]   {signer} -> owner {owner}: {ownerReward} wei, foundation: {foundationReward} wei");
-        }
-
-        // Console.WriteLine($"[XDC-REWARD] Total distributed: {total} wei ({result.Count} reward entries)");
-        // Console.WriteLine($"[XDC-REWARD] ====== End Block {number} ======");
-
-        return result.ToArray();
-    }
-
-    /// <summary>
-    /// Get masternodes from checkpoint header ExtraData.
-    /// V1 format: [32 vanity][N*20 masternode addrs][65 seal]
-    /// </summary>
-    private Address[] GetMasternodesFromCheckpoint(long checkpointBlock)
-    {
-        if (_blockTree is null) return Array.Empty<Address>();
-
-        var header = _blockTree.FindHeader(checkpointBlock, BlockTreeLookupOptions.None);
-        if (header is null) return Array.Empty<Address>();
-
-        byte[] extra = header.ExtraData ?? Array.Empty<byte>();
-        if (extra.Length < 32 + 65) return Array.Empty<Address>();
-
-        int signersLength = extra.Length - 32 - 65;
-        if (signersLength <= 0 || signersLength % 20 != 0) return Array.Empty<Address>();
-
-        int count = signersLength / 20;
-        var masternodes = new Address[count];
-        for (int i = 0; i < count; i++)
-        {
-            byte[] addr = new byte[20];
-            Array.Copy(extra, 32 + (i * 20), addr, 0, 20);
-            masternodes[i] = new Address(addr);
-        }
-
-        // Console.WriteLine($"[XDC-REWARD] Extracted {count} masternodes from checkpoint {checkpointBlock}");
-        return masternodes;
-    }
-
-    /// <summary>
-    /// Get owner of masternode from Validator contract (0x88).
-    /// Storage: validatorsState[candidate].owner at keccak256(candidate, slot=1) + 0
-    /// </summary>
-    private Address GetCandidateOwner(Address candidate)
-    {
-        if (_stateProvider is null) return Address.Zero;
-
-        try
-        {
-            // Slot 1 = validatorsState mapping
-            byte[] candidateHash = new byte[32];
-            candidate.Bytes.CopyTo(candidateHash.AsSpan(12));
-            byte[] slotBytes = new byte[32];
-            new UInt256(1).ToBigEndian(slotBytes);
-
-            byte[] combined = new byte[64];
-            candidateHash.CopyTo(combined, 0);
-            slotBytes.CopyTo(combined, 32);
-            var locHash = Nethermind.Core.Crypto.KeccakHash.ComputeHashBytes(combined);
-
-            var ownerSlot = new UInt256(locHash, true);
-            var ownerBytes = _stateProvider.Get(new StorageCell(ValidatorContract, ownerSlot));
-            if (ownerBytes.Length > 0)
+            if (signatureCount <= 0 || totalSignatures <= 0)
             {
-                var owner = new Address(ownerBytes.Slice(ownerBytes.Length >= 20 ? ownerBytes.Length - 20 : 0, 20).ToArray());
-                return owner;
+                return UInt256.Zero;
             }
+
+            // Convert to UInt256 for precision
+            var signatures = (UInt256)signatureCount;
+            var total = (UInt256)totalSignatures;
+
+
+            UInt256 portion = totalReward / total;
+            UInt256 reward = portion * signatures;
+
+            return reward;
         }
-        catch (Exception)
+
+        internal (BlockReward HolderReward, UInt256 FoundationWalletReward) DistributeRewards(
+            Address masternodeAddress, UInt256 reward, XdcBlockHeader header)
         {
-            // Console.WriteLine($"[XDC-REWARD] Error getting owner for {candidate}: {ex.Message}");
+            Address owner = _masternodeVotingContract.GetCandidateOwner(_transactionProcessor, header, masternodeAddress);
+
+            // 90% of the reward goes to the masternode
+            UInt256 masterReward = reward * 90 / 100;
+
+            // 10% of the reward goes to the foundation wallet
+            UInt256 foundationReward = reward / 10;
+
+            return (new BlockReward(owner, masterReward), foundationReward);
         }
-
-        return Address.Zero;
-    }
-
-    private static UInt256 RewardInflation(UInt256 chainReward, ulong blockNumber)
-    {
-        if (blockNumber >= TIPNoHalvingMNReward) return chainReward;
-        if (BlocksPerYear * 2 <= blockNumber && blockNumber < BlocksPerYear * 5) return chainReward / 2;
-        if (blockNumber >= BlocksPerYear * 5) return chainReward / 4;
-        return chainReward;
     }
 }
