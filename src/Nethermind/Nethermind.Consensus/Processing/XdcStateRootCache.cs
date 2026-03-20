@@ -212,8 +212,10 @@ public static class XdcStateRootCache
     /// <summary>
     /// PR54: Get the remote (geth) state root for a specific block number.
     /// </summary>
-    public static Hash256? GetRemoteStateRoot(long blockNumber) =
-        _remoteRootsByBlock.TryGetValue(blockNumber, out var root) ? root : null;
+    public static Hash256? GetRemoteStateRoot(long blockNumber)
+    {
+        return _remoteRootsByBlock.TryGetValue(blockNumber, out var root) ? root : null;
+    }
 
     /// <summary>
     /// Check if a given root is either a known local root or can be mapped from a remote root.
@@ -230,8 +232,10 @@ public static class XdcStateRootCache
     /// PR54: Check if we have a mapping for a given root
     /// Used to detect state root mismatches
     /// </summary>
-    public static bool HasRootMapping(Hash256 remoteRoot) =
-        _remoteToLocal.ContainsKey(remoteRoot);
+    public static bool HasRootMapping(Hash256 remoteRoot)
+    {
+        return _remoteToLocal.ContainsKey(remoteRoot);
+    }
 
     /// <summary>
     /// Get the latest cached block number and its computed root.
