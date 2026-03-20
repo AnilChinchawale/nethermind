@@ -40,20 +40,21 @@ internal class XdcHeaderValidator : HeaderValidator
     }
 
     /// <summary>
-    /// XDC blocks can have extra data larger than Ethereum's default limit.
+    /// XDC blocks can have extra data up to 2048 bytes (vs Ethereum's 1024).
     /// XDPoS encodes validator signatures and consensus metadata in extra data.
-    /// Blocks around 5.5M have 1037 bytes. Set limit to 2048.
+    /// Blocks around 5.5M have 1037 bytes which exceeds default limit.
+    /// Issue: https://github.com/AnilChinchawale/xdc-node-setup/issues/586
     /// </summary>
     protected override bool ValidateExtraData(BlockHeader header, IReleaseSpec spec, bool isUncle, ref string? error)
     {
         const int XdcMaxExtraDataSize = 2048;
-        
+
         if (header.ExtraData.Length > XdcMaxExtraDataSize)
         {
             error = $"XDC extra data too large: {header.ExtraData.Length} > {XdcMaxExtraDataSize}";
             return false;
         }
-        
+
         return true;
     }
 }
