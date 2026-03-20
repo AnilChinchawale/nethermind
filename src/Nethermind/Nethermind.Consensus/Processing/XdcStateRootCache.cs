@@ -186,14 +186,18 @@ public static class XdcStateRootCache
     /// Get the computed state root for a given block number.
     /// Returns null if no override exists.
     /// </summary>
-    public static Hash256? GetComputedStateRoot(long blockNumber) =
-        _computedStateRoots.TryGetValue(blockNumber, out var root) ? root : null;
+    public static Hash256? GetComputedStateRoot(long blockNumber)
+    {
+        return _computedStateRoots.TryGetValue(blockNumber, out var root) ? root : null;
+    }
 
     /// <summary>
     /// Given a remote (geth) state root, find the locally-computed state root.
     /// </summary>
-    public static Hash256? FindLocalRootForRemote(Hash256 remoteRoot) =
-        _remoteToLocal.TryGetValue(remoteRoot, out var localRoot) ? localRoot : null;
+    public static Hash256? FindLocalRootForRemote(Hash256 remoteRoot)
+    {
+        return _remoteToLocal.TryGetValue(remoteRoot, out var localRoot) ? localRoot : null;
+    }
 
     /// <summary>
     /// PR54: Given a local (computed) state root, find the original remote (geth) state root.
