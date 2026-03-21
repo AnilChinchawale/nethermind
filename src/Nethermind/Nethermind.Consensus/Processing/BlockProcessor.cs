@@ -93,7 +93,7 @@ public partial class BlockProcessor(
         suggestedBlock.ExecutionRequests = block.ExecutionRequests;
     }
 
-    protected bool ShouldComputeStateRoot(BlockHeader header) =>
+    protected virtual bool ShouldComputeStateRoot(BlockHeader header) =>
         !header.IsGenesis || !specProvider.GenesisStateUnavailable;
 
     protected virtual BlockExecutionContext CreateBlockExecutionContext(BlockHeader header, IReleaseSpec spec) =>
@@ -164,7 +164,12 @@ public partial class BlockProcessor(
         }
 
 
+        Hash256 oldHash = header.Hash;
         header.Hash = header.CalculateHash();
+        if (oldHash is not null && oldHash != header.Hash)
+        {
+            Console.WriteLine($"[HASH-MISMATCH] Block {header.Number}: old={oldHash} new={header.Hash} type={header.GetType().Name} isHashResolver={header is Nethermind.Crypto.IHashResolver}");
+        }
 
         return receipts;
     }
