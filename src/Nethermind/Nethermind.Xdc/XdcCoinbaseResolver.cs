@@ -255,7 +255,7 @@ public class XdcCoinbaseResolver
 
         // Recover public key
         Span<byte> publicKey = stackalloc byte[65];
-        bool success = SpanSecP256k1.RecoverKeyFromCompact(
+        bool success = SecP256k1.RecoverKeyFromCompact(
             publicKey,
             hash.Bytes,
             sigBytes64,

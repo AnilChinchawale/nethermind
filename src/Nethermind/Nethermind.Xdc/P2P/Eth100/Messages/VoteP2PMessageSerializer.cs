@@ -21,8 +21,8 @@ namespace Nethermind.Xdc.P2P.Eth100.Messages
 
         public VoteP2PMessage Deserialize(IByteBuffer byteBuffer)
         {
-            RlpStream rlpStream = new NettyRlpStream(byteBuffer);
-            var vote = _voteDecoder.Decode(rlpStream);
+            Rlp.ValueDecoderContext ctx = new(byteBuffer.ReadAllBytesAsSpan());
+            var vote = _voteDecoder.Decode(ref ctx);
             return new VoteP2PMessage(vote);
         }
 

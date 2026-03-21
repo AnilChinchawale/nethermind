@@ -21,8 +21,8 @@ namespace Nethermind.Xdc.P2P.Eth100.Messages
 
         public TimeoutP2PMessage Deserialize(IByteBuffer byteBuffer)
         {
-            RlpStream rlpStream = new NettyRlpStream(byteBuffer);
-            var timeout = _timeoutDecoder.Decode(rlpStream);
+            Rlp.ValueDecoderContext ctx = new(byteBuffer.ReadAllBytesAsSpan());
+            var timeout = _timeoutDecoder.Decode(ref ctx);
             return new TimeoutP2PMessage(timeout);
         }
 

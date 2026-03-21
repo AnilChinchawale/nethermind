@@ -21,8 +21,8 @@ namespace Nethermind.Xdc.P2P.Eth100.Messages
 
         public SyncInfoP2PMessage Deserialize(IByteBuffer byteBuffer)
         {
-            RlpStream rlpStream = new NettyRlpStream(byteBuffer);
-            var syncInfo = _syncInfoDecoder.Decode(rlpStream);
+            Rlp.ValueDecoderContext ctx = new(byteBuffer.ReadAllBytesAsSpan());
+            var syncInfo = _syncInfoDecoder.Decode(ref ctx);
             return new SyncInfoP2PMessage(syncInfo);
         }
 

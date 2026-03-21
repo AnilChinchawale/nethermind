@@ -21,8 +21,8 @@ namespace Nethermind.Xdc.P2P.Eth100.Messages
 
         public QuorumCertificateP2PMessage Deserialize(IByteBuffer byteBuffer)
         {
-            RlpStream rlpStream = new NettyRlpStream(byteBuffer);
-            var qc = _qcDecoder.Decode(rlpStream);
+            Rlp.ValueDecoderContext ctx = new(byteBuffer.ReadAllBytesAsSpan());
+            var qc = _qcDecoder.Decode(ref ctx);
             return new QuorumCertificateP2PMessage(qc);
         }
 
