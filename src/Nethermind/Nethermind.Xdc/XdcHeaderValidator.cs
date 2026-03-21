@@ -123,13 +123,13 @@ public class XdcHeaderValidator(IBlockTree blockTree, IQuorumCertificateManager 
 
     protected override bool ValidateTotalDifficulty(BlockHeader header, BlockHeader parent, ref string? error)
     {
-        // V1: difficulty is 1 (out-of-turn) or 2 (in-turn)
+        // V1: difficulty varies (Clique-style, any positive value)
         // V2: difficulty is always 1
         if (IsV1Block(header))
         {
-            if (header.Difficulty != 1 && header.Difficulty != 2)
+            if (header.Difficulty == 0)
             {
-                error = $"V1 difficulty must be 1 or 2, got {header.Difficulty}.";
+                error = $"V1 difficulty must be positive, got 0.";
                 return false;
             }
         }
