@@ -198,7 +198,9 @@ internal class XdcV1SealValidator : ISealValidator
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     /// <summary>
-    /// Recovers the block signer from the 65-byte seal at ExtraData[32..97].
+    /// Recovers the block signer from the 65-byte seal.
+    /// For normal blocks: seal is at ExtraData[32..97]
+    /// For checkpoint/gap blocks: seal is at ExtraData[length-65..length]
     /// Caches the result in header.Author.
     /// </summary>
     internal bool TryRecoverSigner(BlockHeader header, out Address? signer)
@@ -208,16 +210,15 @@ internal class XdcV1SealValidator : ISealValidator
         if (header.ExtraData is null || header.ExtraData.Length < MinExtraDataLength)
             return false;
 
-        byte[] seal = header.ExtraData[VanityLength..(VanityLength + SealLength)];
+        // Seal is ALWAYS the last 65 bytes (geth compatibility)
+        byte[] seal = header.ExtraData[^SealLength..];
 
         // y-parity must be 0, 1, 2, or 3; values ≥ 4 crash the syscall
         if (seal[64] >= 4)
             return false;
 
-        // Build the "for-sealing" ExtraData: vanity ++ validators (no 65-byte sig)
-        byte[] vanity = header.ExtraData[..VanityLength];
-        byte[] validatorPart = header.ExtraData[(VanityLength + SealLength)..];
-        byte[] sealingExtraData = vanity.Concat(validatorPart).ToArray();
+        // Build the "for-sealing" ExtraData: everything except the last 65 bytes (seal)
+        byte[] sealingExtraData = header.ExtraData[..^SealLength];
 
         // Encode the header for sealing (strips Validator RLP field, replaces ExtraData)
         Hash256 sealingHash = ComputeV1SealingHash(header, sealingExtraData);
