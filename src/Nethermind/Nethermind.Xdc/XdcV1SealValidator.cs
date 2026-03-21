@@ -175,6 +175,9 @@ internal class XdcV1SealValidator : ISealValidator
 
     public bool ValidateSeal(BlockHeader header)
     {
+        // Genesis block always passes seal validation
+        if (header.Number == 0) return true;
+
         if (header.ExtraData is null || header.ExtraData.Length < MinExtraDataLength)
         {
             Console.WriteLine($"[V1-SEAL] Block {header.Number} FAIL: ExtraData is {(header.ExtraData is null ? "null" : $"{header.ExtraData.Length} bytes")} (need {MinExtraDataLength}). Type={header.GetType().Name}");
