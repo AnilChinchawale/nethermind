@@ -1,0 +1,25 @@
+{
+  "Init": {
+    "WebSocketsEnabled": true,
+    "StoreReceipts": true,
+    "EnableUnsecuredDevWallet": false,
+    "IsMining": false,
+    "ChainSpecPath": "chainspec/xdc-apothem.json",
+    "LogFileName": "xdc-apothem.logs.txt",
+    "MemoryHint": 2048000000
+  },
+  "Network": {
+    "ActivePeersMaxCount": 50,
+    "P2PPort": 30304,
+    "DiscoveryPort": 30304
+  },
+  "JsonRpc": {
+    "Enabled": true,
+    "Host": "0.0.0.0",
+    "Port": 8545,
+    "EnabledModules": ["Eth", "Subscribe", "Trace", "TxPool", "Web3", "Personal", "Proof", "Net", "Parity", "Health", "Rpc", "Debug", "Admin"]
+  },
+  "Metrics": {
+    "NodeName": "XDC Apothem Testnet"
+  }
+}
