@@ -117,25 +117,43 @@ internal class XdcSealValidator(IMasternodesCalculator masternodesCalculator, IE
             throw new ArgumentException($"Only type of {nameof(XdcBlockHeader)} is allowed, but got type {header.GetType().Name}.", nameof(header));
         if (xdcHeader.Number == 0)
             return true;
+            
+        // Determine if V1 or V2 block
+        IXdcReleaseSpec xdcSpec = specProvider.GetXdcSpec(xdcHeader);
+        bool isV1Block = xdcHeader.Number < xdcSpec.SwitchBlock;
+        
         if (header.Author is null)
         {
-            if (xdcHeader.Validator is null
-                || xdcHeader.Validator.Length != 65
+            byte[]? signature;
+            
+            if (isV1Block)
+            {
+                // V1: signature is in last 65 bytes of ExtraData (Clique-style)
+                // ExtraData format: vanity(32) + signature(65) = 97 bytes minimum
+                if (xdcHeader.ExtraData is null || xdcHeader.ExtraData.Length < 97)
+                    return false;
+                signature = xdcHeader.ExtraData[^65..];
+            }
+            else
+            {
+                // V2: signature is in the Validator field
+                signature = xdcHeader.Validator;
+            }
+            
+            if (signature is null
+                || signature.Length != 65
                  //Passing an illegal y parity to syscall will cause a fatal error and program can crash
-                 || xdcHeader.Validator[64] >= 4)
+                 || signature[64] >= 4)
                 return false;
 
-            Address signer = _ethereumEcdsa.RecoverAddress(new Signature(xdcHeader.Validator.AsSpan(0, 64), xdcHeader.Validator[64]), Keccak.Compute(_headerDecoder.Encode(xdcHeader, RlpBehaviors.ForSealing).Bytes));
+            Address signer = _ethereumEcdsa.RecoverAddress(
+                new Signature(signature.AsSpan(0, 64), signature[64]), 
+                Keccak.Compute(_headerDecoder.Encode(xdcHeader, RlpBehaviors.ForSealing).Bytes));
 
             header.Author = signer;
         }
 
-        // V1 blocks (pre-switchBlock) have Beneficiary=0x0 by design.
-        // The real signer is recovered from the Validator signature above.
-        // V2 blocks set Beneficiary to the actual signer address.
-        IXdcReleaseSpec xdcSpec = specProvider.GetXdcSpec(xdcHeader);
-        
-        if (xdcHeader.Number < xdcSpec.SwitchBlock)
+        if (isV1Block)
         {
             // V1: Beneficiary is always 0x0, signer is in Author (recovered above).
             // Seal is valid if ECDSA recovery succeeded.
