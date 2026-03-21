@@ -24,6 +24,29 @@ public class XdcHeaderValidator(IBlockTree blockTree, IQuorumCertificateManager 
         if (parent is not XdcBlockHeader parentXdcHeader)
             throw new ArgumentException($"Only type of {nameof(XdcBlockHeader)} is allowed, but got type {parent.GetType().Name}.", nameof(parent));
 
+        var xdcSpec = _specProvider.GetXdcSpec(xdcHeader);
+        bool isV1Block = xdcHeader.Number < xdcSpec.SwitchBlock;
+
+        if (isV1Block)
+        {
+            // V1 (Clique-style) validation: only check uncle hash and base chain validity.
+            // V1 blocks have empty Validator/ExtraConsensusData fields and varying difficulty/nonce.
+            if (xdcHeader.UnclesHash != Keccak.OfAnEmptySequenceRlp)
+            {
+                error = "Cannot contain uncles.";
+                return false;
+            }
+
+            if (!base.Validate<TOrphaned>(header, parent, isUncle, out error))
+            {
+                return false;
+            }
+
+            error = null;
+            return true;
+        }
+
+        // V2 validation
         if (xdcHeader.Validator is null || xdcHeader.Validator.Length == 0)
         {
             error = "Validator field is required in XDC header.";
@@ -85,12 +108,19 @@ public class XdcHeaderValidator(IBlockTree blockTree, IQuorumCertificateManager 
             return false;
         }
 
-        if (_sealValidator is XdcSealValidator xdcSealValidator ?
-            !xdcSealValidator.ValidateParams(parent, header, out error) :
-            !_sealValidator.ValidateParams(parent, header, isUncle))
+        var xdcSpec = _specProvider.GetXdcSpec((XdcBlockHeader)header);
+        bool isV1Block = header.Number < xdcSpec.SwitchBlock;
+        
+        // V1 blocks have no QC/consensus data — skip ValidateParams which checks V2-specific fields
+        if (!isV1Block)
         {
-            error = "Invalid consensus data in header.";
-            return false;
+            if (_sealValidator is XdcSealValidator xdcSealValidator ?
+                !xdcSealValidator.ValidateParams(parent, header, out error) :
+                !_sealValidator.ValidateParams(parent, header, isUncle))
+            {
+                error = "Invalid consensus data in header.";
+                return false;
+            }
         }
 
         return true;
@@ -101,7 +131,11 @@ public class XdcHeaderValidator(IBlockTree blockTree, IQuorumCertificateManager 
 
     protected override bool ValidateTotalDifficulty(BlockHeader header, BlockHeader parent, ref string? error)
     {
-        if (header.Difficulty != 1)
+        var xdcSpec = _specProvider.GetXdcSpec((XdcBlockHeader)header);
+        bool isV1Block = header.Number < xdcSpec.SwitchBlock;
+        
+        // V1 blocks have varying difficulty; V2 always has difficulty=1
+        if (!isV1Block && header.Difficulty != 1)
         {
             error = "Difficulty must be 1.";
             return false;
@@ -112,9 +146,10 @@ public class XdcHeaderValidator(IBlockTree blockTree, IQuorumCertificateManager 
     protected override bool ValidateTimestamp(BlockHeader header, BlockHeader parent, ref string? error)
     {
         var xdcSpec = _specProvider.GetXdcSpec((XdcBlockHeader)header); // will throw if no spec found
+        bool isV1Block = header.Number < xdcSpec.SwitchBlock;
 
-        //TODO check if V2 header
-        if (parent.Timestamp + (ulong)xdcSpec.MinePeriod > header.Timestamp)
+        // V1 blocks used a 2-second period but timestamp validation was not strict
+        if (!isV1Block && parent.Timestamp + (ulong)xdcSpec.MinePeriod > header.Timestamp)
         {
             error = "Timestamp in header cannot be lower than ancestor plus slot time.";
             return false;
