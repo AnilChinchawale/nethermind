@@ -21,7 +21,11 @@
             "timeoutPeriod": 10,
             "minePeriod": 2
           }
-        ]
+        ],
+        "masternodeVotingContract": "0x0000000000000000000000000000000000000088",
+        "blockSignerContract": "0x0000000000000000000000000000000000000089",
+        "tradingStateAddressBinary": "0x0000000000000000000000000000000000000092",
+        "randomizeSMCBinary": "0x0000000000000000000000000000000000000090"
       }
     }
   },
