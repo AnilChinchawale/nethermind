@@ -102,9 +102,7 @@ public class XdcModule : Module
             // P2P message serializers and decoders
             .AddSingleton<IHeaderDecoder, XdcHeaderDecoder>()
             .AddSingleton(new BlockDecoder(new XdcHeaderDecoder()))
-            // Override BlockHeadersMessage serializer to use XdcHeaderDecoder
-            .AddSingleton<Network.P2P.IZeroMessageSerializer<Network.P2P.Subprotocols.Eth.V62.Messages.BlockHeadersMessage>, XdcBlockHeadersMessageSerializer>()
-            .AddSingleton<Network.IZeroInnerMessageSerializer<Network.P2P.Subprotocols.Eth.V62.Messages.BlockHeadersMessage>, XdcBlockHeadersMessageSerializer>()
+            // BlockHeadersMessageSerializer will pick up IHeaderDecoder from DI (registered above)
 
             // sync
             .AddSingleton<IBeaconSyncStrategy, XdcBeaconSyncStrategy>()
