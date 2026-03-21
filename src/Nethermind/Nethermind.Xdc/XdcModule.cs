@@ -78,6 +78,9 @@ public class XdcModule : Module
             .AddSingleton<XdcV1SealValidator>()
             .AddSingleton<ISealValidator, XdcV1SealValidator, XdcSealValidator, XdcChainSpecEngineParameters>(CreateDispatchingSealValidator)
             .AddSingleton<IUnclesValidator, MustBeEmptyUnclesValidator>()
+            .AddSingleton<IMasternodesCalculator, MasternodesCalculator>()
+            .AddSingleton<ISigningTxCache, SigningTxCache>()
+            .AddSingleton<IForensicsProcessor, ForensicsProcessor>()
 
             // managers
             .AddSingleton<IVotesManager, VotesManager>()
@@ -94,6 +97,8 @@ public class XdcModule : Module
 
             // sync
             .AddSingleton<IBeaconSyncStrategy, XdcBeaconSyncStrategy>()
+            .AddSingleton<XdcStateSyncSnapshotManager>()
+            .AddSingleton<IStateSyncPivot, XdcStateSyncPivot>()
             .AddSingleton<IPeerAllocationStrategyFactory<StateSyncBatch>, XdcStateSyncAllocationStrategyFactory>()
 
             .AddSingleton<IBlockProducerTxSourceFactory, XdcTxPoolTxSourceFactory>()
