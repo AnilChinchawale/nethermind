@@ -27,6 +27,8 @@ using Nethermind.Api.Steps;
 using Nethermind.Synchronization;
 using Nethermind.Synchronization.FastSync;
 using Nethermind.Synchronization.ParallelSync;
+using Nethermind.Network;
+using Nethermind.Xdc.P2P;
 
 namespace Nethermind.Xdc;
 
@@ -97,6 +99,7 @@ public class XdcModule : Module
 
             // sync
             .AddSingleton<IBeaconSyncStrategy, XdcBeaconSyncStrategy>()
+            .AddSingleton<IProtocolValidator, XdcProtocolValidator>()
             .AddSingleton<XdcStateSyncSnapshotManager>()
             .AddSingleton<IStateSyncPivot, XdcStateSyncPivot>()
             .AddSingleton<IPeerAllocationStrategyFactory<StateSyncBatch>, XdcStateSyncAllocationStrategyFactory>()
