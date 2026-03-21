@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using System;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Int256;
@@ -39,6 +40,10 @@ public sealed class XdcHeaderDecoder : BaseXdcHeaderDecoder<XdcBlockHeader>
 
     protected override void EncodeHeaderSpecificFields(RlpStream rlpStream, XdcBlockHeader header, RlpBehaviors rlpBehaviors)
     {
+        if (header.Number == 16)
+        {
+            Console.WriteLine($"[ENCODE-16] Validators={(header.Validators is null ? "null" : $"{header.Validators.Length}b")} Validator={(header.Validator is null ? "null" : $"{header.Validator.Length}b")} Penalties={(header.Penalties is null ? "null" : $"{header.Penalties.Length}b")} sealing={IsForSealing(rlpBehaviors)}");
+        }
         rlpStream.Encode(header.Validators);
         if (!IsForSealing(rlpBehaviors))
         {
