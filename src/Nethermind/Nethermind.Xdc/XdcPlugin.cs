@@ -53,7 +53,10 @@ public class XdcPlugin(ChainSpec chainSpec) : IConsensusPlugin
         _nethermindApi.ProtocolsManager.AddSupportedCapability(new(Protocol.Eth, 63));
         _nethermindApi.ProtocolsManager.AddSupportedCapability(new(Protocol.Eth, 64));
         _nethermindApi.ProtocolsManager.AddSupportedCapability(new(Protocol.Eth, 65));
-        _nethermindApi.ProtocolsManager.AddSupportedCapability(new(Protocol.Eth, 100));
+        // eth/100 capability advertised but handler not yet registered via IProtocolHandlerFactory.
+        // Keeping it disabled for now to avoid NotSupportedException during protocol negotiation.
+        // TODO: Register Eth100ProtocolFactory as IProtocolHandlerFactory to enable eth/100.
+        // _nethermindApi.ProtocolsManager.AddSupportedCapability(new(Protocol.Eth, 100));
         return Task.CompletedTask;
     }
 
