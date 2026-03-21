@@ -28,6 +28,7 @@ using Nethermind.Synchronization;
 using Nethermind.Synchronization.FastSync;
 using Nethermind.Synchronization.ParallelSync;
 using Nethermind.Network;
+using Nethermind.Serialization.Rlp;
 using Nethermind.Xdc.P2P;
 
 namespace Nethermind.Xdc;
@@ -96,6 +97,10 @@ public class XdcModule : Module
             .AddSingleton<IPenaltyHandler, PenaltyHandler>()
             .AddSingleton<ITimeoutTimer, TimeoutTimer>()
             .AddSingleton<ISyncInfoManager, SyncInfoManager>()
+
+            // P2P message serializers and decoders
+            .AddSingleton<IHeaderDecoder, XdcHeaderDecoder>()
+            .AddSingleton(new BlockDecoder(new XdcHeaderDecoder()))
 
             // sync
             .AddSingleton<IBeaconSyncStrategy, XdcBeaconSyncStrategy>()
