@@ -25,11 +25,12 @@ internal class XdcBlockProcessor : BlockProcessor
     {
     }
 
-    // XDC: Do not recompute state root after processing.
+    // XDC: Do not recompute state root or hash after processing.
     // NM and geth compute different state roots (EIP-158 differences, reward ordering, etc.)
-    // We preserve the original state root from the geth-computed header.
+    // We preserve the original state root + hash from the geth-computed header.
     // The state root bypass is also applied in erigon-xdc (commit a8f4fb1).
     protected override bool ShouldComputeStateRoot(BlockHeader header) => false;
+    protected override bool ShouldRecalculateHash(BlockHeader header) => false;
 
     // Match Go's big.Int.Bytes() behavior: zero produces empty bytes, not [0x00].
     protected override BlockExecutionContext CreateBlockExecutionContext(BlockHeader header, IReleaseSpec spec) =>
