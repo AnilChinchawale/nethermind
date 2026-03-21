@@ -28,6 +28,7 @@ using Nethermind.Synchronization;
 using Nethermind.Synchronization.FastSync;
 using Nethermind.Synchronization.ParallelSync;
 using Nethermind.Network;
+using Nethermind.Network.P2P;
 using Nethermind.Serialization.Rlp;
 using Nethermind.Xdc.P2P;
 
@@ -101,6 +102,9 @@ public class XdcModule : Module
             // P2P message serializers and decoders
             .AddSingleton<IHeaderDecoder, XdcHeaderDecoder>()
             .AddSingleton(new BlockDecoder(new XdcHeaderDecoder()))
+            // Override BlockHeadersMessage serializer to use XdcHeaderDecoder
+            .AddSingleton<Network.P2P.IZeroMessageSerializer<Network.P2P.Subprotocols.Eth.V62.Messages.BlockHeadersMessage>, XdcBlockHeadersMessageSerializer>()
+            .AddSingleton<Network.IZeroInnerMessageSerializer<Network.P2P.Subprotocols.Eth.V62.Messages.BlockHeadersMessage>, XdcBlockHeadersMessageSerializer>()
 
             // sync
             .AddSingleton<IBeaconSyncStrategy, XdcBeaconSyncStrategy>()
