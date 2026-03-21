@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Anil Chinchawale
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
 using Nethermind.Consensus;
 using Nethermind.Core;
 
@@ -37,11 +36,7 @@ internal class XdcDispatchingSealValidator : ISealValidator
     private ISealValidator Select(BlockHeader header)
     {
         if (!_skipV1Validation && header.Number < _switchBlock)
-        {
-            Console.WriteLine($"[XDC-SEAL] Block {header.Number} → V1 (switchBlock={_switchBlock})");
             return _v1Validator;
-        }
-        Console.WriteLine($"[XDC-SEAL] Block {header.Number} → V2 (switchBlock={_switchBlock}, skipV1={_skipV1Validation})");
         return _v2Validator;
     }
 

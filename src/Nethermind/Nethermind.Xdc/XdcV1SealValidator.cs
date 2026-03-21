@@ -179,20 +179,12 @@ internal class XdcV1SealValidator : ISealValidator
         if (header.Number == 0) return true;
 
         if (header.ExtraData is null || header.ExtraData.Length < MinExtraDataLength)
-        {
-            Console.WriteLine($"[V1-SEAL] Block {header.Number} FAIL: ExtraData is {(header.ExtraData is null ? "null" : $"{header.ExtraData.Length} bytes")} (need {MinExtraDataLength}). Type={header.GetType().Name}");
             return false;
-        }
 
         if (header.Author is not null)
-        {
-            Console.WriteLine($"[V1-SEAL] Block {header.Number} OK: Author already set to {header.Author}");
             return true; // Already verified (cached during ValidateParams)
-        }
 
-        bool result = TryRecoverSigner(header, out Address? signer) && signer is not null;
-        Console.WriteLine($"[V1-SEAL] Block {header.Number} {(result ? "OK" : "FAIL")}: recovered signer={signer}");
-        return result;
+        return TryRecoverSigner(header, out Address? signer) && signer is not null;
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
