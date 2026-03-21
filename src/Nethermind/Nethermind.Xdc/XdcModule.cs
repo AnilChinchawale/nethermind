@@ -68,7 +68,7 @@ public class XdcModule : Module
             // penalty handler
 
             // reward handler
-            .AddSingleton<IRewardCalculator, XdcRewardCalculator>()
+            .AddScoped<IRewardCalculator, XdcRewardCalculator>()
 
             // forensics handler
 
