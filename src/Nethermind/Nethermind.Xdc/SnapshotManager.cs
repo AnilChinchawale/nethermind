@@ -84,7 +84,12 @@ internal class SnapshotManager : ISnapshotManager
     {
         if (e.Block.Hash is null || !blockTree.WasProcessed(e.Block.Number, e.Block.Hash))
             return;
-        UpdateMasterNodes((XdcBlockHeader)e.Block.Header);
+        if (e.Block.Header is not XdcBlockHeader xdcHeader)
+        {
+            // Block header is not XdcBlockHeader — convert it
+            xdcHeader = XdcBlockHeader.FromBlockHeader(e.Block.Header);
+        }
+        UpdateMasterNodes(xdcHeader);
     }
 
     private void UpdateMasterNodes(XdcBlockHeader header)
@@ -92,8 +97,10 @@ internal class SnapshotManager : ISnapshotManager
         ulong round;
         if (header.IsGenesis)
             round = 0;
-        else
+        else if (header.ExtraConsensusData is not null)
             round = header.ExtraConsensusData.BlockRound;
+        else
+            round = 0; // V1 blocks don't have ExtraConsensusData
         // Could consider dropping the round parameter here, since the consensus parameters used here should not change
         IXdcReleaseSpec spec = specProvider.GetXdcSpec(header, round);
         if (!ISnapshotManager.IsTimeForSnapshot(header.Number, spec))
