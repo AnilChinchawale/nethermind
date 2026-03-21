@@ -129,6 +129,18 @@ internal class XdcSealValidator(IMasternodesCalculator masternodesCalculator, IE
 
             header.Author = signer;
         }
+
+        // V1 blocks (pre-switchBlock) have Beneficiary=0x0 by design.
+        // The real signer is recovered from the Validator signature above.
+        // Only V2 blocks set Beneficiary to the actual signer address.
+        IXdcReleaseSpec xdcSpec = specProvider.GetXdcSpec(xdcHeader);
+        if (xdcHeader.Number < xdcSpec.SwitchBlock && xdcHeader.Beneficiary == Address.Zero)
+        {
+            // V1: signer recovered successfully, that's sufficient for seal validation.
+            // Full masternode/leader checks happen in ValidateParams.
+            return header.Author is not null;
+        }
+
         return xdcHeader.Beneficiary == xdcHeader.Author;
     }
 }
