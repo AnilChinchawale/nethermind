@@ -22,7 +22,7 @@ using Nethermind.TxPool;
 
 namespace Nethermind.Network.P2P.Subprotocols.Eth.V63
 {
-    public class Eth63ProtocolHandler : Eth62ProtocolHandler
+    public class Eth63ProtocolHandler : Eth62ProtocolHandler, ProtocolHandlers.IStaticProtocolInfo
     {
         private readonly MessageQueue<GetNodeDataMessage, IByteArrayList> _nodeDataRequests;
 
@@ -44,6 +44,7 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V63
         }
 
         public override byte ProtocolVersion => EthVersions.Eth63;
+        public static new byte Version => EthVersions.Eth63;
 
         public override int MessageIdSpaceSize => 17; // magic number here following Go
 

@@ -42,7 +42,7 @@ internal class XdcProtocolHandler(
 
     public override string Name => "xdpos2";
 
-    public static byte Version => 100;
+    public static new byte Version => 100;
     public override byte ProtocolVersion => Version;
 
     public override int MessageIdSpaceSize => XdcMessageCode.SyncInfoMsg + 1;

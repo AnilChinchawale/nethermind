@@ -24,7 +24,7 @@ using Nethermind.TxPool;
 
 namespace Nethermind.Network.P2P.Subprotocols.Eth.V62
 {
-    public class Eth62ProtocolHandler : SyncPeerProtocolHandlerBase, IZeroProtocolHandler
+    public class Eth62ProtocolHandler : SyncPeerProtocolHandlerBase, IZeroProtocolHandler, ProtocolHandlers.IStaticProtocolInfo
     {
         protected bool _statusReceived;
         private readonly TxFloodController _floodController;
@@ -58,6 +58,7 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V62
         public void DisableTxFiltering() => _floodController.IsEnabled = false;
 
         public static string Code => Protocol.Eth;
+        public static byte Version => EthVersions.Eth62;
         public override byte ProtocolVersion => EthVersions.Eth62;
         public override string ProtocolCode => Protocol.Eth;
         public override int MessageIdSpaceSize => 8;

@@ -56,7 +56,7 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V66
 
         public override string Name => "eth66";
 
-        public static byte Version => EthVersions.Eth66;
+        public static new byte Version => EthVersions.Eth66;
         public override byte ProtocolVersion => Version;
 
         public override void HandleMessage(ZeroPacket message)

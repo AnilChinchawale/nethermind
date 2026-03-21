@@ -143,6 +143,8 @@ public class NetworkModule(IConfigProvider configProvider) : Module
             // Protocol handler factories (using clean DSL with Autofac Func auto-generation)
             .AddProtocolHandler<Subprotocols.Snap.SnapProtocolHandler>()
             .AddProtocolHandler<Subprotocols.NodeData.NodeDataProtocolHandler>()
+            .AddProtocolHandler<Subprotocols.Eth.V62.Eth62ProtocolHandler>()
+            .AddProtocolHandler<Subprotocols.Eth.V63.Eth63ProtocolHandler>()
             .AddProtocolHandler<Subprotocols.Eth.V66.Eth66ProtocolHandler>()
             .AddProtocolHandler<Subprotocols.Eth.V67.Eth67ProtocolHandler>()
             .AddProtocolHandler<Subprotocols.Eth.V68.Eth68ProtocolHandler>()
