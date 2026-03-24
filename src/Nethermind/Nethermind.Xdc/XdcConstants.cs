@@ -88,4 +88,10 @@ public static class XdcConstants
     /// Registered as a keyed IDb via ContainerBuilderExtensions.AddDatabase.
     /// </summary>
     public const string SnapshotDbName = "xdcSnapshot";
+
+    /// <summary>
+    /// Expected length of signing transaction calldata:
+    /// 4 bytes method selector + 32 bytes blockNumber + 32 bytes blockHash = 68
+    /// </summary>
+    public const int SignTransactionDataLength = 68;
 }

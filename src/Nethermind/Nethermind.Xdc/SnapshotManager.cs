@@ -63,8 +63,8 @@ internal class SnapshotManager : ISnapshotManager
 
     public Snapshot? GetSnapshotByBlockNumber(long blockNumber, IXdcReleaseSpec spec)
     {
-        var gapBlockNum = Math.Max(0, blockNumber - blockNumber % spec.EpochLength - spec.Gap);
-        return GetSnapshotByGapNumber(gapBlockNum);
+        var gapBlockNum = Math.Max(0L, blockNumber - blockNumber % spec.EpochLength - spec.Gap);
+        return GetSnapshotByGapNumber((ulong)gapBlockNum);
     }
 
     public void StoreSnapshot(Snapshot snapshot)

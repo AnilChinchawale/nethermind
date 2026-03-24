@@ -11,8 +11,10 @@ using Nethermind.Xdc.Spec;
 using System;
 using System.Collections.Generic;
 using Nethermind.Crypto;
-using Nethermind.Xdc.Contracts;
+using Nethermind.Evm.State;
 using Nethermind.Evm.TransactionProcessing;
+using Nethermind.Logging;
+using Nethermind.Xdc.Contracts;
 
 namespace Nethermind.Xdc
 {
@@ -24,7 +26,7 @@ namespace Nethermind.Xdc
     ///   When TIPUpgradeReward activates, protector/observer beneficiaries must be added.
     /// - Current split implemented here: 90% to masternode owner, 10% to foundation.
     /// </summary>
-    public class XdcRewardCalculator : IRewardCalculator
+    public class XdcRewardCalculator : IRewardCalculator, IRewardCalculatorSource
     {
         // XDC rule: signing transactions are sampled/merged every N blocks (N=15 on XDC).
         // Only block numbers that are multiples of MergeSignRange are considered when tallying signers.
@@ -34,8 +36,11 @@ namespace Nethermind.Xdc
         private readonly IBlockTree _blockTree;
         private readonly IMasternodeVotingContract _masternodeVotingContract;
         private readonly ISigningTxCache _signingTxCache;
-        private readonly ITransactionProcessor _transactionProcessor;
+        private ITransactionProcessor _transactionProcessor;
 
+        /// <summary>
+        /// Full constructor with all dependencies
+        /// </summary>
         public XdcRewardCalculator(
             IEpochSwitchManager epochSwitchManager,
             ISpecProvider specProvider,
@@ -51,6 +56,27 @@ namespace Nethermind.Xdc
             _masternodeVotingContract = masternodeVotingContract;
             _signingTxCache = signingTxCache;
             _transactionProcessor = transactionProcessor;
+        }
+
+        /// <summary>
+        /// Source constructor — creates an instance that can later receive a transaction processor via Get()
+        /// </summary>
+        public XdcRewardCalculator(
+            ILogManager logManager,
+            IBlockTree blockTree,
+            IWorldState worldState,
+            IEthereumEcdsa ecdsa,
+            Address? foundationWallet)
+        {
+            _ethereumEcdsa = ecdsa as EthereumEcdsa;
+            _blockTree = blockTree;
+            // These will be null until Get() is called — only used as IRewardCalculatorSource
+        }
+
+        public IRewardCalculator Get(ITransactionProcessor processor)
+        {
+            _transactionProcessor = processor;
+            return this;
         }
         /// <summary>
         /// Calculates block rewards according to XDPoS consensus rules.

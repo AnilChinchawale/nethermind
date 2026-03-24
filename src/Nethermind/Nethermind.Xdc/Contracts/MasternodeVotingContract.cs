@@ -12,6 +12,7 @@ using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Core.Crypto;
 using Nethermind.Evm.State;
 using Nethermind.Int256;
+using Nethermind.Xdc.Types;
 using System;
 
 namespace Nethermind.Xdc.Contracts;

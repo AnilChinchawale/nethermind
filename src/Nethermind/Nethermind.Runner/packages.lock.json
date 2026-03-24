@@ -1858,6 +1858,7 @@
           "Nethermind.Consensus": "[1.36.0-unstable, )",
           "Nethermind.Core": "[1.36.0-unstable, )",
           "Nethermind.Crypto": "[1.36.0-unstable, )",
+          "Nethermind.Evm": "[1.36.0-unstable, )",
           "Nethermind.Network": "[1.36.0-unstable, )",
           "Nethermind.Serialization.Rlp": "[1.36.0-unstable, )",
           "Nethermind.Specs": "[1.36.0-unstable, )"

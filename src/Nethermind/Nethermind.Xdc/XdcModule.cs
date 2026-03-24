@@ -17,7 +17,9 @@ using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Logging;
 using Nethermind.Network;
 using Nethermind.Network.P2P.Subprotocols.Eth;
+using Nethermind.Core.Specs;
 using Nethermind.Specs.ChainSpecStyle;
+using Nethermind.Xdc.Contracts;
 using Nethermind.Stats;
 using Nethermind.Synchronization;
 using Nethermind.TxPool;
@@ -71,13 +73,14 @@ public class XdcModule : Module
         builder.Register(ctx =>
         {
             var blockTree = ctx.Resolve<IBlockTree>();
-            var penaltyHandler = ctx.Resolve<IPenaltyHandler>();
+            var votingContract = ctx.Resolve<IMasternodeVotingContract>();
+            var specProvider = ctx.Resolve<ISpecProvider>();
 
             // Use persistent RocksDB for snapshot storage (resolves to the keyed IDb registered above).
             // This replaces the previous MemDb which caused a full snapshot rebuild from genesis on every restart.
             var snapshotDb = ctx.ResolveKeyed<IDb>(XdcConstants.SnapshotDbName);
 
-            return new SnapshotManager(snapshotDb, blockTree, penaltyHandler);
+            return new SnapshotManager(snapshotDb, blockTree, votingContract, specProvider);
         }).As<ISnapshotManager>()
           .SingleInstance();
 

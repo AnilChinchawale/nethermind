@@ -31,6 +31,23 @@ public class XdcReleaseSpec : ReleaseSpec, IXdcReleaseSpec
 
     public Address[] GenesisMasterNodes { get; set; }
 
+    // Hard-fork / TIP activation flags
+    public Address MasternodeVotingContract { get; set; }
+    public bool IsTipTrc21FeeEnabled { get; set; }
+    public bool IsBlackListingEnabled { get; set; }
+    public bool IsTIP2019 { get; set; }
+    public bool IsTIPXDCXMiner { get; set; }
+    public bool IsDynamicGasLimitBlock { get; set; }
+    public bool IsTipUpgradePenaltyEnabled { get; set; }
+    public List<Address> BlackListedAddresses { get; set; } = new();
+    public byte[]? RandomizeSMCBinary { get; set; }
+    public byte[]? XDCXLendingFinalizedTradeAddressBinary { get; set; }
+    public byte[]? XDCXLendingAddressBinary { get; set; }
+    public byte[]? XDCXAddressBinary { get; set; }
+    public byte[]? TradingStateAddressBinary { get; set; }
+    public int LimitPenaltyEpochV2 { get; set; }
+    public int RangeReturnSigner { get; set; }
+
     // Reward-related properties for XdcRewardCalculator v2 API
     public Address FoundationWallet { get; set; } = XdcConstants.FoundationWalletAddress;
     public Address BlockSignerContract { get; set; } = XdcConstants.BlockSignersAddress;
@@ -108,6 +125,23 @@ public interface IXdcReleaseSpec : IReleaseSpec
     Address BlockSignerContract { get; set; }
     long Reward { get; set; }           // total reward per epoch in XDC (ether units)
     long MergeSignRange { get; set; }   // only blocks divisible by this qualify
+
+    // Hard-fork / TIP activation flags
+    Address MasternodeVotingContract { get; set; }
+    bool IsTipTrc21FeeEnabled { get; set; }
+    bool IsBlackListingEnabled { get; set; }
+    bool IsTIP2019 { get; set; }
+    bool IsTIPXDCXMiner { get; set; }
+    bool IsDynamicGasLimitBlock { get; set; }
+    bool IsTipUpgradePenaltyEnabled { get; set; }
+    List<Address> BlackListedAddresses { get; set; }
+    byte[]? RandomizeSMCBinary { get; set; }
+    byte[]? XDCXLendingFinalizedTradeAddressBinary { get; set; }
+    byte[]? XDCXLendingAddressBinary { get; set; }
+    byte[]? XDCXAddressBinary { get; set; }
+    byte[]? TradingStateAddressBinary { get; set; }
+    int LimitPenaltyEpochV2 { get; set; }
+    int RangeReturnSigner { get; set; }
 
     public void ApplyV2Config(ulong round);
 }

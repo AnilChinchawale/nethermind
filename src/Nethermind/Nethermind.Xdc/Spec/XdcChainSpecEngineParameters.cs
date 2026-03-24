@@ -20,6 +20,37 @@ public class XdcChainSpecEngineParameters : IChainSpecEngineParameters
     public int SwitchEpoch { get; set; }
     public long SwitchBlock { get; set; }
 
+    // Contract addresses
+    public Address MasternodeVotingContract { get; set; }
+    public Address BlockSignerContract { get; set; }
+
+    // Hard-fork block numbers
+    public long? TipTrc21Fee { get; set; }
+    public long BlackListHFNumber { get; set; }
+    public long TIP2019Block { get; set; }
+    public long TipXDCX { get; set; }
+    public long TIPXDCXMinerDisable { get; set; }
+    public long DynamicGasLimitBlock { get; set; }
+    public long? TipUpgradePenalty { get; set; }
+    public long MergeSignRange { get; set; } = 15;
+
+    // Blacklisted addresses
+    public Address[]? BlackListedAddresses { get; set; }
+
+    // Binary contract code
+    public byte[]? RandomizeSMCBinary { get; set; }
+    public byte[]? XDCXLendingFinalizedTradeAddressBinary { get; set; }
+    public byte[]? XDCXLendingAddressBinary { get; set; }
+    public byte[]? XDCXAddressBinary { get; set; }
+    public byte[]? TradingStateAddressBinary { get; set; }
+
+    // Penalty parameters
+    public int LimitPenaltyEpoch { get; set; }
+    public int LimitPenaltyEpochV2 { get; set; }
+    public int RangeReturnSigner { get; set; }
+
+    // Genesis masternodes (for chains that start as v1)
+    public Address[] GenesisMasternodes { get; set; }
 
     private List<V2ConfigParams> _v2Configs = new();
     public List<V2ConfigParams> V2Configs

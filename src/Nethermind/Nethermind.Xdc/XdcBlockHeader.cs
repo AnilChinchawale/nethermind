@@ -38,7 +38,8 @@ public class XdcBlockHeader : BlockHeader, IHashResolver
         {
             if (_validatorsAddress is not null)
                 return _validatorsAddress;
-            _validatorsAddress = XdcExtensions.ExtractAddresses(Validators);
+            Address[]? addresses = XdcExtensions.ExtractAddresses(Validators);
+            _validatorsAddress = addresses is not null ? [.. addresses] : null;
             return _validatorsAddress;
         }
         set { _validatorsAddress = value; }
@@ -53,7 +54,8 @@ public class XdcBlockHeader : BlockHeader, IHashResolver
         {
             if (_penaltiesAddress is not null)
                 return _penaltiesAddress;
-            _penaltiesAddress = XdcExtensions.ExtractAddresses(Penalties);
+            Address[]? addresses = XdcExtensions.ExtractAddresses(Penalties);
+            _penaltiesAddress = addresses is not null ? [.. addresses] : null;
             return _penaltiesAddress;
         }
         set { _penaltiesAddress = value; }
