@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Anil Chinchawale
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using Nethermind.Abi;
 using Nethermind.Blockchain.Headers;
 using Autofac;
 using Nethermind.Blockchain;
@@ -62,6 +63,30 @@ public class XdcModule : Module
         builder.RegisterType<PenaltyHandler>()
             .As<IPenaltyHandler>()
             .SingleInstance();
+
+        // Register MasternodeVotingContract — needed by SnapshotManager and XdcTransactionProcessor
+        builder.Register(ctx =>
+        {
+            var abiEncoder = ctx.Resolve<IAbiEncoder>();
+            var readOnlyTxProcessingEnvFactory = ctx.Resolve<IReadOnlyTxProcessingEnvFactory>();
+            var chainSpec = ctx.Resolve<ChainSpec>();
+
+            Address contractAddress = XdcConstants.ValidatorAddress; // default 0x88
+            if (chainSpec.EngineChainSpecParametersProvider is not null)
+            {
+                try
+                {
+                    var xdcParams = chainSpec.EngineChainSpecParametersProvider
+                        .GetChainSpecParameters<XdcChainSpecEngineParameters>();
+                    if (xdcParams.MasternodeVotingContract is not null)
+                        contractAddress = xdcParams.MasternodeVotingContract;
+                }
+                catch { /* fallback to default */ }
+            }
+
+            return new MasternodeVotingContract(abiEncoder, contractAddress, readOnlyTxProcessingEnvFactory);
+        }).As<IMasternodeVotingContract>()
+          .SingleInstance();
 
         // Register persistent RocksDB for XDPoS snapshot storage.
         // Inline equivalent of ContainerBuilderExtensions.AddDatabase (Nethermind.Init not referenced here).
