@@ -5,7 +5,6 @@ using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
 using Nethermind.Evm;
-using Nethermind.Evm.GasPolicy;
 using Nethermind.Evm.State;
 using Nethermind.Evm.Tracing;
 using Nethermind.Evm.Tracing.State;
@@ -17,7 +16,7 @@ using Nethermind.Xdc.Spec;
 
 namespace Nethermind.Xdc;
 
-internal class XdcTransactionProcessor : EthereumTransactionProcessorBase
+internal class XdcTransactionProcessor : TransactionProcessorBase
 {
     private readonly IMasternodeVotingContract _masternodeVotingContract;
 
@@ -66,7 +65,7 @@ internal class XdcTransactionProcessor : EthereumTransactionProcessorBase
         if (owner is null || owner == Address.Zero)
             return;
 
-        UInt256 effectiveGasPrice = CalculateEffectiveGasPrice(tx, spec.IsEip1559Enabled, header.BaseFeePerGas, out UInt256 opcodeGasPrice);
+        UInt256 effectiveGasPrice = CalculateEffectiveGasPrice(tx, spec.IsEip1559Enabled, header.BaseFeePerGas);
         UInt256 fee = effectiveGasPrice * (ulong)spentGas;
 
         WorldState.AddToBalanceAndCreateIfNotExists(owner, fee, spec);
@@ -150,37 +149,32 @@ internal class XdcTransactionProcessor : EthereumTransactionProcessorBase
         return base.IncrementNonce(tx, header, spec, tracer, opts);
     }
 
-    protected override TransactionResult ValidateGas(Transaction tx, BlockHeader header, long minGasRequired)
+    protected override TransactionResult ValidateGas(Transaction tx, BlockHeader header, long minGasRequired, bool validate)
     {
         var spec = SpecProvider.GetXdcSpec((XdcBlockHeader)header);
         if (tx.RequiresSpecialHandling(spec))
         {
             return TransactionResult.Ok;
         }
-        return base.ValidateGas(tx, header, minGasRequired);
+        return base.ValidateGas(tx, header, minGasRequired, validate);
     }
 
-    protected override UInt256 CalculateEffectiveGasPrice(Transaction tx, bool eip1559Enabled, in UInt256 baseFee, out UInt256 opcodeGasPrice)
+    protected override UInt256 CalculateEffectiveGasPrice(Transaction tx, bool eip1559Enabled, in UInt256 baseFee)
     {
-        // IMPORTANT: if we override the effective gas price to 0, we must also set opcodeGasPrice to 0.
-        // TxExecutionContext is created with opcodeGasPrice and is later used for refunding, tracing, etc.
-        //
-        // Also: IsSpecialTransaction requires the IXdcReleaseSpec to decide Randomize vs BlockSigner, so
-        // we need the current block spec here.
+        // XDC special transactions have zero gas price
         IXdcReleaseSpec xdcSpec = (IXdcReleaseSpec)VirtualMachine.BlockExecutionContext.Spec;
 
         if (tx.IsSpecialTransaction(xdcSpec))
         {
-            opcodeGasPrice = UInt256.Zero;
             return UInt256.Zero;
         }
 
-        return base.CalculateEffectiveGasPrice(tx, eip1559Enabled, in baseFee, out opcodeGasPrice);
+        return base.CalculateEffectiveGasPrice(tx, eip1559Enabled, in baseFee);
     }
 
-    protected override IntrinsicGas<EthereumGasPolicy> CalculateIntrinsicGas(Transaction tx, IReleaseSpec spec) =>
+    protected override IntrinsicGas CalculateIntrinsicGas(Transaction tx, IReleaseSpec spec) =>
         tx.RequiresSpecialHandling((IXdcReleaseSpec)spec)
-            ? new IntrinsicGas<EthereumGasPolicy>()
+            ? new IntrinsicGas(0, 0)
             : base.CalculateIntrinsicGas(tx, spec);
 
     private TransactionResult ExecuteSpecialTransaction(Transaction tx, ITxTracer tracer, ExecutionOptions opts)
@@ -193,7 +187,7 @@ internal class XdcTransactionProcessor : EthereumTransactionProcessorBase
         // maybe a better approach would be adding an XdcGasPolicy
         TransactionResult result;
         _ = RecoverSenderIfNeeded(tx, spec, opts, UInt256.Zero);
-        IntrinsicGas<EthereumGasPolicy> intrinsicGas = CalculateIntrinsicGas(tx, spec);
+        IntrinsicGas intrinsicGas = CalculateIntrinsicGas(tx, spec);
 
         if (!(result = ValidateSender(tx, header, spec, tracer, opts))
             || !(result = IncrementNonce(tx, header, spec, tracer, opts))

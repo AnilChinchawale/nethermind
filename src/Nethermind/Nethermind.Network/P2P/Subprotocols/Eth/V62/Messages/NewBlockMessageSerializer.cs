@@ -9,7 +9,8 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V62.Messages
 {
     public class NewBlockMessageSerializer : IZeroInnerMessageSerializer<NewBlockMessage>
     {
-        private readonly BlockDecoder _blockDecoder = new();
+        // Use ActiveBlockDecoder to pick up chain-specific header encoding (e.g. XDC 18-field format)
+        private static BlockDecoder GetBlockDecoder() => new BlockDecoder(RlpStream.ActiveHeaderDecoder);
 
         public void Serialize(IByteBuffer byteBuffer, NewBlockMessage message)
         {
@@ -30,7 +31,7 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V62.Messages
 
         public int GetLength(NewBlockMessage message, out int contentLength)
         {
-            contentLength = _blockDecoder.GetLength(message.Block, RlpBehaviors.None) +
+            contentLength = GetBlockDecoder().GetLength(message.Block, RlpBehaviors.None) +
                             Rlp.LengthOf(message.TotalDifficulty);
 
             return Rlp.LengthOfSequence(contentLength);

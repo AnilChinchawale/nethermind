@@ -35,7 +35,7 @@ internal class SnapshotManager : ISnapshotManager
         this.specProvider = specProvider;
     }
 
-    public Snapshot? GetSnapshotByGapNumber(long gapNumber)
+    public Snapshot? GetSnapshotByGapNumber(ulong gapNumber)
     {
         var gapBlockHeader = blockTree.FindHeader((long)gapNumber) as XdcBlockHeader;
 
@@ -78,6 +78,18 @@ internal class SnapshotManager : ISnapshotManager
 
         snapshotDb.Set(key, rlpEncodedSnapshot.Bytes);
         _snapshotCache.Set(snapshot.HeaderHash, snapshot);
+    }
+
+    public (Address[] Masternodes, Address[] PenalizedNodes) CalculateNextEpochMasternodes(long blockNumber, Hash256 parentHash, IXdcReleaseSpec spec)
+    {
+        // Get candidates from the voting contract at the parent block
+        var parentHeader = blockTree.FindHeader(parentHash, blockNumber - 1) as XdcBlockHeader;
+        if (parentHeader is null)
+            return (Array.Empty<Address>(), Array.Empty<Address>());
+
+        Address[] candidates = votingContract.GetCandidatesByStake(parentHeader);
+        // For now, no penalty calculation — return all candidates as masternodes
+        return (candidates, Array.Empty<Address>());
     }
 
     private void OnBlockAddedToMain(object? sender, BlockReplacementEventArgs e)

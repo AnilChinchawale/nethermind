@@ -45,12 +45,19 @@ namespace Nethermind.Xdc
                 return;
             }
 
-            // TODO: Validate vote signature
-            // TODO: Check vote is for current/future round
-            // TODO: Add to vote pool
-
-            if (_logger.IsDebug)
-                _logger.Debug($"Vote processed: {vote}");
+            try
+            {
+                // Delegate to VotesManager.OnReceiveVote which:
+                // 1. Validates vote distance from current block
+                // 2. Filters by round and verifies signer is a masternode
+                // 3. Adds to vote pool and checks QC threshold
+                _votesManager.OnReceiveVote(vote);
+            }
+            catch (Exception ex)
+            {
+                if (_logger.IsDebug)
+                    _logger.Debug($"Failed to process vote: {ex.Message}");
+            }
         }
 
         public void ProcessTimeout(Timeout timeout)
@@ -65,12 +72,19 @@ namespace Nethermind.Xdc
                 return;
             }
 
-            // TODO: Validate timeout signature
-            // TODO: Check timeout is for current/future round
-            // TODO: Add to timeout pool
-
-            if (_logger.IsDebug)
-                _logger.Debug($"Timeout processed: {timeout}");
+            try
+            {
+                // Delegate to TimeoutCertificateManager.OnReceiveTimeout which:
+                // 1. Validates timeout distance from current epoch
+                // 2. Filters by round and verifies signer is a masternode
+                // 3. Adds to timeout pool and checks TC threshold
+                _timeoutManager.OnReceiveTimeout(timeout);
+            }
+            catch (Exception ex)
+            {
+                if (_logger.IsDebug)
+                    _logger.Debug($"Failed to process timeout: {ex.Message}");
+            }
         }
 
         public void ProcessSyncInfo(SyncInfo syncInfo)
@@ -78,19 +92,57 @@ namespace Nethermind.Xdc
             if (_logger.IsTrace)
                 _logger.Trace($"Processing SyncInfo");
 
-            if (_syncInfoManager == null)
+            if (syncInfo == null)
             {
                 if (_logger.IsDebug)
-                    _logger.Debug("SyncInfoManager not configured, syncInfo dropped");
+                    _logger.Debug("Received null SyncInfo, ignoring");
                 return;
             }
 
-            // TODO: Validate QC and TC in syncInfo
-            // TODO: Update local consensus state if peer is ahead
-            // TODO: Trigger sync if we're behind
+            // Process embedded QC if present and we have a QC manager
+            if (syncInfo.HighestQuorumCert != null && _qcManager != null)
+            {
+                try
+                {
+                    _qcManager.CommitCertificate(syncInfo.HighestQuorumCert);
+                }
+                catch (Exception ex)
+                {
+                    if (_logger.IsDebug)
+                        _logger.Debug($"Failed to commit QC from SyncInfo: {ex.Message}");
+                }
+            }
+
+            // Process embedded TC if present and we have a timeout manager
+            if (syncInfo.HighestTimeoutCert != null && _timeoutManager != null)
+            {
+                try
+                {
+                    _timeoutManager.ProcessTimeoutCertificate(syncInfo.HighestTimeoutCert);
+                }
+                catch (Exception ex)
+                {
+                    if (_logger.IsDebug)
+                        _logger.Debug($"Failed to process TC from SyncInfo: {ex.Message}");
+                }
+            }
+
+            // Delegate to SyncInfoManager for any additional sync logic
+            if (_syncInfoManager != null)
+            {
+                try
+                {
+                    _syncInfoManager.ProcessSyncInfo(syncInfo);
+                }
+                catch (Exception ex)
+                {
+                    if (_logger.IsDebug)
+                        _logger.Debug($"Failed to process SyncInfo: {ex.Message}");
+                }
+            }
 
             if (_logger.IsDebug)
-                _logger.Debug($"SyncInfo processed: QC at {syncInfo?.HighestQuorumCert?.ProposedBlockInfo}, TC at {syncInfo?.HighestTimeoutCert?.Round}");
+                _logger.Debug($"SyncInfo processed: QC at {syncInfo.HighestQuorumCert?.ProposedBlockInfo}, TC at {syncInfo.HighestTimeoutCert?.Round}");
         }
 
         public void ProcessQuorumCertificate(QuorumCertificate qc)
@@ -105,13 +157,29 @@ namespace Nethermind.Xdc
                 return;
             }
 
-            // TODO: Validate QC signatures
-            // TODO: Check QC is for valid block
-            // TODO: Update highest QC if newer
-            // TODO: Trigger finality updates
+            if (qc == null)
+            {
+                if (_logger.IsDebug)
+                    _logger.Debug("Received null QC, ignoring");
+                return;
+            }
+
+            try
+            {
+                // Delegate to QuorumCertificateManager.CommitCertificate which:
+                // 1. Updates highest QC if this one is newer
+                // 2. Triggers 3-chain finality updates
+                // 3. Updates lock QC and commit block info
+                _qcManager.CommitCertificate(qc);
+            }
+            catch (Exception ex)
+            {
+                if (_logger.IsDebug)
+                    _logger.Debug($"Failed to process QC: {ex.Message}");
+            }
 
             if (_logger.IsDebug)
-                _logger.Debug($"QC processed: {qc?.ProposedBlockInfo}");
+                _logger.Debug($"QC processed: {qc.ProposedBlockInfo}");
         }
     }
 }

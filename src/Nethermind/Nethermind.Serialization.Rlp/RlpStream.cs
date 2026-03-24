@@ -24,17 +24,27 @@ namespace Nethermind.Serialization.Rlp
     public class RlpStream
     {
         private static readonly HeaderDecoder _defaultHeaderDecoder = new();
-        private static readonly BlockDecoder _blockDecoder = new();
+        private static readonly BlockDecoder _defaultBlockDecoder = new();
 
         // Allow plugin-registered header decoders (e.g. XdcHeaderDecoder) to replace the static default.
         // Populated on demand so plugins have time to register via Rlp.RegisterDecoder() before first use.
         private static volatile IHeaderDecoder? _overrideHeaderDecoder;
 
+        private static volatile BlockDecoder? _overrideBlockDecoder;
+
         /// <summary>Override the header encoder used by Encode(BlockHeader). Called by chain-specific plugins during Init().</summary>
-        public static void SetHeaderDecoder(IHeaderDecoder decoder) => _overrideHeaderDecoder = decoder;
+        public static void SetHeaderDecoder(IHeaderDecoder decoder)
+        {
+            _overrideHeaderDecoder = decoder;
+            // Also update the block decoder so Encode(Block) uses the same header format
+            _overrideBlockDecoder = new BlockDecoder(decoder);
+        }
 
         /// <summary>The active header decoder: plugin override if set, otherwise the default HeaderDecoder.</summary>
         public static IHeaderDecoder ActiveHeaderDecoder => _overrideHeaderDecoder ?? _defaultHeaderDecoder;
+
+        /// <summary>The active block decoder: uses the override header decoder if set.</summary>
+        private static BlockDecoder ActiveBlockDecoder => _overrideBlockDecoder ?? _defaultBlockDecoder;
         private static readonly BlockBodyDecoder _blockBodyDecoder = new();
         private static readonly BlockInfoDecoder _blockInfoDecoder = new();
         private static readonly TxDecoder _txDecoder = TxDecoder.Instance;
@@ -88,7 +98,7 @@ namespace Nethermind.Serialization.Rlp
                 decoder.Encode(this, item, rlpBehaviors);
             }
         }
-        public void Encode(Block value) => _blockDecoder.Encode(this, value);
+        public void Encode(Block value) => ActiveBlockDecoder.Encode(this, value);
 
         public void Encode(BlockHeader value) => ActiveHeaderDecoder.Encode(this, value);
 
