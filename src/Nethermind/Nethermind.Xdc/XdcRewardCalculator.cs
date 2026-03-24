@@ -11,7 +11,6 @@ using Nethermind.Xdc.Spec;
 using System;
 using System.Collections.Generic;
 using Nethermind.Crypto;
-using Nethermind.Evm.State;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Logging;
 using Nethermind.Xdc.Contracts;
@@ -19,74 +18,87 @@ using Nethermind.Xdc.Contracts;
 namespace Nethermind.Xdc
 {
     /// <summary>
+    /// IRewardCalculatorSource that creates a fully-wired XdcRewardCalculatorInstance
+    /// when Get(ITransactionProcessor) is called by the BlockProcessingModule.
+    ///
     /// Reward model (current mainnet):
     /// - Rewards are paid only at epoch checkpoints (number % EpochLength == 0).
-    /// - For now we **ignore** TIPUpgradeReward behavior because on mainnet
-    ///   the upgrade activation is set far in the future (effectively “not active”).
-    ///   When TIPUpgradeReward activates, protector/observer beneficiaries must be added.
-    /// - Current split implemented here: 90% to masternode owner, 10% to foundation.
+    /// - Current split: 90% to masternode owner, 10% to foundation.
+    ///   (RewardVoterPercent = 0 on XDC mainnet, so voters receive nothing.)
     /// </summary>
-    public class XdcRewardCalculator : IRewardCalculator, IRewardCalculatorSource
+    public class XdcRewardCalculatorSource : IRewardCalculatorSource
     {
-        // XDC rule: signing transactions are sampled/merged every N blocks (N=15 on XDC).
-        // Only block numbers that are multiples of MergeSignRange are considered when tallying signers.
+        private readonly IEpochSwitchManager _epochSwitchManager;
+        private readonly ISpecProvider _specProvider;
+        private readonly IBlockTree _blockTree;
+        private readonly IMasternodeVotingContract _masternodeVotingContract;
+        private readonly ISigningTxCache _signingTxCache;
+        private readonly ILogManager _logManager;
+
+        public XdcRewardCalculatorSource(
+            IEpochSwitchManager epochSwitchManager,
+            ISpecProvider specProvider,
+            IBlockTree blockTree,
+            IMasternodeVotingContract masternodeVotingContract,
+            ISigningTxCache signingTxCache,
+            ILogManager logManager)
+        {
+            _epochSwitchManager = epochSwitchManager ?? throw new ArgumentNullException(nameof(epochSwitchManager));
+            _specProvider = specProvider ?? throw new ArgumentNullException(nameof(specProvider));
+            _blockTree = blockTree ?? throw new ArgumentNullException(nameof(blockTree));
+            _masternodeVotingContract = masternodeVotingContract ?? throw new ArgumentNullException(nameof(masternodeVotingContract));
+            _signingTxCache = signingTxCache ?? throw new ArgumentNullException(nameof(signingTxCache));
+            _logManager = logManager ?? throw new ArgumentNullException(nameof(logManager));
+        }
+
+        public IRewardCalculator Get(ITransactionProcessor processor)
+        {
+            return new XdcRewardCalculator(
+                _epochSwitchManager,
+                _specProvider,
+                _blockTree,
+                _masternodeVotingContract,
+                _signingTxCache,
+                processor,
+                _logManager);
+        }
+    }
+
+    /// <summary>
+    /// Calculates block rewards according to XDPoS consensus rules.
+    /// Rewards are only distributed at epoch checkpoints.
+    /// Split: 90% masternode owner, 10% foundation wallet.
+    /// </summary>
+    public class XdcRewardCalculator : IRewardCalculator
+    {
         private readonly EthereumEcdsa _ethereumEcdsa;
         private readonly IEpochSwitchManager _epochSwitchManager;
         private readonly ISpecProvider _specProvider;
         private readonly IBlockTree _blockTree;
         private readonly IMasternodeVotingContract _masternodeVotingContract;
         private readonly ISigningTxCache _signingTxCache;
-        private ITransactionProcessor _transactionProcessor;
+        private readonly ITransactionProcessor _transactionProcessor;
+        private readonly ILogger _logger;
 
-        /// <summary>
-        /// Full constructor with all dependencies
-        /// </summary>
         public XdcRewardCalculator(
             IEpochSwitchManager epochSwitchManager,
             ISpecProvider specProvider,
             IBlockTree blockTree,
             IMasternodeVotingContract masternodeVotingContract,
             ISigningTxCache signingTxCache,
-            ITransactionProcessor transactionProcessor)
+            ITransactionProcessor transactionProcessor,
+            ILogManager logManager)
         {
             _ethereumEcdsa = new EthereumEcdsa(specProvider.ChainId);
-            _epochSwitchManager = epochSwitchManager;
-            _specProvider = specProvider;
-            _blockTree = blockTree;
-            _masternodeVotingContract = masternodeVotingContract;
-            _signingTxCache = signingTxCache;
-            _transactionProcessor = transactionProcessor;
+            _epochSwitchManager = epochSwitchManager ?? throw new ArgumentNullException(nameof(epochSwitchManager));
+            _specProvider = specProvider ?? throw new ArgumentNullException(nameof(specProvider));
+            _blockTree = blockTree ?? throw new ArgumentNullException(nameof(blockTree));
+            _masternodeVotingContract = masternodeVotingContract ?? throw new ArgumentNullException(nameof(masternodeVotingContract));
+            _signingTxCache = signingTxCache ?? throw new ArgumentNullException(nameof(signingTxCache));
+            _transactionProcessor = transactionProcessor ?? throw new ArgumentNullException(nameof(transactionProcessor));
+            _logger = logManager.GetClassLogger<XdcRewardCalculator>();
         }
 
-        /// <summary>
-        /// Source constructor — creates an instance that can later receive a transaction processor via Get()
-        /// </summary>
-        public XdcRewardCalculator(
-            ILogManager logManager,
-            IBlockTree blockTree,
-            IWorldState worldState,
-            IEthereumEcdsa ecdsa,
-            Address? foundationWallet)
-        {
-            _ethereumEcdsa = ecdsa as EthereumEcdsa;
-            _blockTree = blockTree;
-            // These will be null until Get() is called — only used as IRewardCalculatorSource
-        }
-
-        public IRewardCalculator Get(ITransactionProcessor processor)
-        {
-            _transactionProcessor = processor;
-            return this;
-        }
-        /// <summary>
-        /// Calculates block rewards according to XDPoS consensus rules.
-        ///
-        /// For XDPoS, rewards are only distributed at epoch checkpoints (blocks where number % 900 == 0).
-        /// At these checkpoints, rewards are calculated based on masternode signature counts during
-        /// the previous epoch and distributed according to the 90/10 split model.
-        /// </summary>
-        /// <param name="block">The block to calculate rewards for</param>
-        /// <returns>Array of BlockReward objects for all reward recipients</returns>
         public BlockReward[] CalculateRewards(Block block)
         {
             if (block is null)
@@ -100,13 +112,21 @@ namespace Nethermind.Xdc
             if (!_epochSwitchManager.IsEpochSwitchAtBlock(xdcHeader)) return Array.Empty<BlockReward>();
 
             var number = xdcHeader.Number;
-            IXdcReleaseSpec spec = _specProvider.GetXdcSpec(xdcHeader, xdcHeader.ExtraConsensusData.BlockRound);
+            IXdcReleaseSpec spec = _specProvider.GetXdcSpec(xdcHeader, xdcHeader.ExtraConsensusData?.BlockRound ?? 0);
             if (number == spec.SwitchBlock + 1) return Array.Empty<BlockReward>();
 
             Address foundationWalletAddr = spec.FoundationWallet;
-            if (foundationWalletAddr == default || foundationWalletAddr == Address.Zero) throw new InvalidOperationException("Foundation wallet address cannot be empty");
+            if (foundationWalletAddr == default || foundationWalletAddr == Address.Zero)
+                throw new InvalidOperationException("Foundation wallet address cannot be empty");
 
             var (signers, count) = GetSigningTxCount(xdcHeader, spec);
+
+            if (count == 0)
+            {
+                if (_logger.IsDebug)
+                    _logger.Debug($"XdcRewardCalculator: block {number} is checkpoint but no signers found — no rewards");
+                return Array.Empty<BlockReward>();
+            }
 
             UInt256 chainReward = (UInt256)spec.Reward * Unit.Ether;
             Dictionary<Address, UInt256> rewardSigners = CalculateRewardForSigners(chainReward, signers, count);
@@ -119,7 +139,12 @@ namespace Nethermind.Xdc
                 totalFoundationWalletReward += foundationWalletReward;
                 rewards.Add(holderReward);
             }
-            if (totalFoundationWalletReward > UInt256.Zero) rewards.Add(new BlockReward(foundationWalletAddr, totalFoundationWalletReward));
+            if (totalFoundationWalletReward > UInt256.Zero)
+                rewards.Add(new BlockReward(foundationWalletAddr, totalFoundationWalletReward));
+
+            if (_logger.IsInfo)
+                _logger.Info($"XdcRewardCalculator: block {number} checkpoint — {signers.Count} signers, {count} total signs, {rewards.Count} reward entries");
+
             return rewards.ToArray();
         }
 
@@ -149,14 +174,10 @@ namespace Nethermind.Xdc
                     if (epochCount == rewardEpochCount)
                     {
                         startBlockNumber = i + 1;
-                        // Get masternodes from epoch switch header
                         if (h.Number <= spec.SwitchBlock)
                             masternodes = new HashSet<Address>(h.ExtraData.ParseV1Masternodes());
                         else
                             masternodes = new HashSet<Address>(h.ValidatorsAddress!);
-                        // TIPUpgradeReward path (protector/observer selection) is currently ignored,
-                        // because on mainnet the upgrade height is set to an effectively unreachable block.
-                        // If/when that changes, we must compute protector/observer sets here.
                         break;
                     }
                 }
@@ -175,7 +196,6 @@ namespace Nethermind.Xdc
             }
 
             // Only blocks at heights that are multiples of MergeSignRange are considered.
-            // Calculate start >= startBlockNumber so that start % MergeSignRange == 0
             long start = ((startBlockNumber + mergeSignRange - 1) / mergeSignRange) * mergeSignRange;
             for (long i = start; i < endBlockNumber; i += mergeSignRange)
             {
@@ -216,10 +236,8 @@ namespace Nethermind.Xdc
         }
 
         /// <summary>
-        /// Calculates a proportional reward based on the number of signatures.
-        /// Uses UInt256 arithmetic to maintain precision with large Wei values.
-        ///
         /// Formula: (totalReward / totalSignatures) * signatureCount
+        /// Matches geth-xdc: calcReward.Div(chainReward, totalSigner).Mul(calcReward, rLog.Sign)
         /// </summary>
         internal UInt256 CalculateProportionalReward(
             long signatureCount,
@@ -227,18 +245,13 @@ namespace Nethermind.Xdc
             UInt256 totalReward)
         {
             if (signatureCount <= 0 || totalSignatures <= 0)
-            {
                 return UInt256.Zero;
-            }
 
-            // Convert to UInt256 for precision
             var signatures = (UInt256)signatureCount;
             var total = (UInt256)totalSignatures;
 
-
             UInt256 portion = totalReward / total;
             UInt256 reward = portion * signatures;
-
             return reward;
         }
 
@@ -247,10 +260,10 @@ namespace Nethermind.Xdc
         {
             Address owner = _masternodeVotingContract.GetCandidateOwner(_transactionProcessor, header, masternodeAddress);
 
-            // 90% of the reward goes to the masternode
+            // 90% of the reward goes to the masternode owner (RewardMasterPercent = 90)
             UInt256 masterReward = reward * 90 / 100;
 
-            // 10% of the reward goes to the foundation wallet
+            // 10% of the reward goes to the foundation wallet (RewardFoundationPercent = 10)
             UInt256 foundationReward = reward / 10;
 
             return (new BlockReward(owner, masterReward), foundationReward);

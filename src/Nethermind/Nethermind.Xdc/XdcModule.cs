@@ -40,6 +40,25 @@ public class XdcModule : Module
     {
         base.Load(builder);
 
+        // Register XdcChainSpecEngineParameters from the ChainSpec engine section.
+        // Needed by XdcChainSpecBasedSpecProvider to populate XdcReleaseSpec fields.
+        builder.Register(ctx =>
+        {
+            var chainSpec = ctx.Resolve<ChainSpec>();
+            return chainSpec.EngineChainSpecParametersProvider
+                .GetChainSpecParameters<XdcChainSpecEngineParameters>();
+        }).As<XdcChainSpecEngineParameters>()
+          .SingleInstance();
+
+        // CRITICAL: Override ISpecProvider with XdcChainSpecBasedSpecProvider.
+        // The default NethermindModule registers ChainSpecBasedSpecProvider which creates
+        // standard ReleaseSpec objects. XDC needs XdcReleaseSpec (implements IXdcReleaseSpec)
+        // for epoch length, rewards, foundation wallet, etc.
+        // Without this override, GetXdcSpec() fails with "Expected IXdcReleaseSpec".
+        builder.RegisterType<XdcChainSpecBasedSpecProvider>()
+            .As<ISpecProvider>()
+            .SingleInstance();
+
         // Register XDC header decoder so HeaderStore uses it for DB read/write
         // Without this, headers are stored/loaded with standard 15-field encoding
         // instead of XDC 18-field encoding (Validators, Validator, Penalties)
@@ -166,36 +185,19 @@ public class XdcModule : Module
             .As<Nethermind.Consensus.Validators.IHeaderValidator>()
             .SingleInstance();
 
-        // Register XDC reward calculator for checkpoint block rewards
-        // NOTE: We only register as IRewardCalculatorSource, NOT as IRewardCalculator directly.
-        // The BlockProcessingModule creates IRewardCalculator from IRewardCalculatorSource.
-        // XdcBlockProcessor will create its own instance to ensure it uses the correct calculator.
-        builder.Register(ctx =>
-        {
-            var logManager = ctx.Resolve<ILogManager>();
-            var blockTree = ctx.Resolve<IBlockTree>();
-            var worldState = ctx.Resolve<IWorldState>();
-            var ecdsa = ctx.Resolve<IEthereumEcdsa>();
-            var chainSpec = ctx.Resolve<ChainSpec>();
+        // Register SigningTxCache — caches signing transactions (to 0x89) per block hash.
+        // Required by XdcRewardCalculator to tally masternode signatures for reward distribution.
+        builder.RegisterType<SigningTxCache>()
+            .As<ISigningTxCache>()
+            .SingleInstance();
 
-            // Get foundation wallet address from chainspec engine parameters
-            Address? foundationWallet = null;
-            if (chainSpec.EngineChainSpecParametersProvider is not null)
-            {
-                try
-                {
-                    var xdcParams = chainSpec.EngineChainSpecParametersProvider.GetChainSpecParameters<XdcChainSpecEngineParameters>();
-                    foundationWallet = xdcParams.FoundationWalletAddr;
-                }
-                catch
-                {
-                    // Fallback to default constant if not found in chainspec
-                }
-            }
-
-            return new XdcRewardCalculator(logManager, blockTree, worldState, ecdsa, foundationWallet);
-        }).As<IRewardCalculatorSource>()
-          .InstancePerLifetimeScope();
+        // Register XDC reward calculator source for checkpoint block rewards.
+        // The BlockProcessingModule creates IRewardCalculator from IRewardCalculatorSource
+        // by calling Get(ITransactionProcessor). XdcRewardCalculatorSource creates a fully-wired
+        // XdcRewardCalculator with all dependencies resolved from DI.
+        builder.RegisterType<XdcRewardCalculatorSource>()
+            .As<IRewardCalculatorSource>()
+            .InstancePerLifetimeScope();
 
         // Register XDC transaction processor for BlockSigners special handling
         builder.RegisterType<XdcTransactionProcessor>()

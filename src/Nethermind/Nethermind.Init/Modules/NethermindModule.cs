@@ -56,8 +56,8 @@ public class NethermindModule(ChainSpec chainSpec, IConfigProvider configProvide
             .AddSource(new ConfigRegistrationSource())
             .AddModule(new BlockProcessingModule(configProvider.GetConfig<IInitConfig>(), configProvider.GetConfig<IBlocksConfig>()))
             .AddModule(new BlockTreeModule(configProvider.GetConfig<IReceiptConfig>()))
-            .AddModule(new XdcModule())
             .AddSingleton<ISpecProvider, ChainSpecBasedSpecProvider>()
+            .AddModule(new XdcModule())
 
             .AddKeyedSingleton<IProtectedPrivateKey>(IProtectedPrivateKey.NodeKey, (ctx) => ctx.Resolve<INethermindApi>().NodeKey!)
             .AddSingleton<IAbiEncoder>(AbiEncoder.Instance)
