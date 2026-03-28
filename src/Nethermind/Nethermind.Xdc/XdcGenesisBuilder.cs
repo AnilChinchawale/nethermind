@@ -73,6 +73,10 @@ public class XdcGenesisBuilder(
     private void Preallocate(Block genesis)
     {
         transactionProcessor.SetBlockExecutionContext(new BlockExecutionContext(genesis.Header, specProvider.GetSpec(genesis.Header)));
+        if (chainSpec.Allocations is null)
+        {
+            return;
+        }
         foreach ((Address address, ChainSpecAllocation allocation) in chainSpec.Allocations.OrderBy(static a => a.Key))
         {
             stateProvider.CreateAccount(address, allocation.Balance, allocation.Nonce);

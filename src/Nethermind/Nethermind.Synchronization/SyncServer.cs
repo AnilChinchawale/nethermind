@@ -375,7 +375,17 @@ namespace Nethermind.Synchronization
 
         public IOwnedReadOnlyList<BlockHeader> FindHeaders(Hash256 hash, int numberOfBlocks, int skip, bool reverse)
         {
-            return _blockTree.FindHeaders(hash, numberOfBlocks, skip, reverse);
+            var headers = _blockTree.FindHeaders(hash, numberOfBlocks, skip, reverse);
+
+            // XDC Fix (Issue #53): Swap local state roots with geth-compatible roots
+            // before sending to peers. Prevents EthDisconnectRequested from go-geth nodes.
+            if (_blockTree.ChainId == 50 || _blockTree.ChainId == 51)
+            {
+                try { Nethermind.Xdc.XdcSyncServerInterceptor.SwapOutboundStateRoots(headers); }
+                catch { /* Don't break sync if interceptor fails */ }
+            }
+
+            return headers;
         }
 
         public IOwnedReadOnlyList<byte[]?> GetNodeData(IReadOnlyList<Hash256> keys, CancellationToken cancellationToken, NodeDataType includedTypes = NodeDataType.State | NodeDataType.Code)
